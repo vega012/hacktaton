@@ -3,7 +3,7 @@
 Proyecto para el hackathon **"Hack AI Agents Impact"** (NTT DATA x Sundai LATAM, Perú Tech Week).
 **Caso B2 – Banca: normativa y políticas internas.**
 
-Demo: **http://169.58.187.13/chat** (chat de casos) · **http://169.58.187.13** (panel de administración)
+Demo: **https://169.58.187.13/chat** (chat de casos) · **https://169.58.187.13** (panel de administración)
 
 ## Problema
 

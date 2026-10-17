@@ -37,7 +37,7 @@ Un equipo de agentes que **lee, valida y aplica** la normativa del banco:
 
 ## 4. Demo (2 min) — en vivo
 
-URL: **http://169.58.187.13/chat**
+URL: **https://169.58.187.13/chat**
 
 1. Clic en **CASO-01** (crédito de S/ 70,000). Dictamen **no procede**: endeudamiento (900 + 2,150) / 6,000 =
    50.8 % > 35 %, scoring 610 < 620 (con la v1 habría pasado), monto sobre la autonomía del gerente.
