@@ -52,6 +52,10 @@ code { font-family:var(--mono) !important; font-size:.88em !important; padding:1
 .nx-name { font-size:17px; font-weight:650; letter-spacing:-0.02em; color:var(--text); }
 .nx-name span { color:var(--faint); font-weight:500; }
 .nx-sep { flex:1; }
+.nx-link { font:500 13.5px/1 var(--sans); color:var(--muted) !important; text-decoration:none !important; padding:8px 12px;
+  border-radius:999px; border:1px solid transparent; transition:background .15s, border-color .15s, color .15s; }
+.nx-link:hover { color:var(--text) !important; background:var(--surface); border-color:var(--line); }
+.nx-salir { color:var(--text) !important; border-color:var(--line); background:var(--surface); }
 .nx-env { font:500 12.5px/1 var(--mono); color:var(--muted); background:var(--surface); border:1px solid var(--line);
   border-radius:999px; padding:7px 12px; display:inline-flex; align-items:center; gap:8px; }
 .nx-env i { width:7px; height:7px; border-radius:50%; background:var(--ok); display:inline-block; }
@@ -190,12 +194,21 @@ def _cabecera() -> None:
     import html as _html
     from urllib.parse import urlparse
     host = _html.escape(urlparse(API).netloc or API)
+    try:  # Caddy envía el usuario autenticado en X-Usuario (forward_auth)
+        hdr = st.context.headers
+        usuario = hdr.get("X-Usuario") or hdr.get("x-usuario")
+    except Exception:
+        usuario = None
+    usuario_html = (f"<div class='nx-env' title='Sesión iniciada'><i></i>{_html.escape(usuario)} · administrador</div>"
+                    if usuario else f"<div class='nx-env' title='API'><i></i>{host}</div>")
     st.markdown(
         "<div class='nx-top'><div class='nx-mark'><svg width='16' height='16' viewBox='0 0 24 24' fill='none' "
         "stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3v18M5 7h14"
         "M7 7l-3 7a3 3 0 0 0 6 0zM17 7l-3 7a3 3 0 0 0 6 0z'/></svg></div>"
         "<div class='nx-name'>Normativa · Agentes de IA <span>&nbsp;/&nbsp; Panel de administración</span></div>"
-        f"<div class='nx-sep'></div><div class='nx-env' title='API'><i></i>{host}</div></div>",
+        f"<div class='nx-sep'></div>{usuario_html}"
+        "<a class='nx-link' href='/chat' target='_self'>Ir al chat</a>"
+        "<a class='nx-link nx-salir' href='/logout' target='_self'>Cerrar sesión</a></div>",
         unsafe_allow_html=True)
 
 
@@ -734,24 +747,33 @@ with tabs[2]:
             st.info("Aún no hay ejecuciones registradas para este agente.")
             return
         filas.sort(key=lambda t: t.get("created_at") or "", reverse=True)
+        if clave == "a2":  # chat: una sola tabla, con el botón "Cómo razonó" en cada fila
+            sel_key = "rz_sel_a2"
+            anchos = [1.5, 2, 1.5, 5, 1.2, 1.1, 1.6]
+            cab = st.columns(anchos)
+            for col, txt in zip(cab, ["Fecha", "Usuario", "Agente", "Consulta", "Estado", "Latencia", ""]):
+                col.caption(txt.upper())
+            for t in filas[:50]:
+                c = st.columns(anchos, vertical_alignment="center")
+                c[0].caption((t.get("created_at") or "")[5:16].replace("T", " "))
+                c[1].caption(md((t.get("usuario") or "—").split(":")[0]))
+                c[2].caption(md(t.get("agente") or ""))
+                c[3].markdown(md((t.get("entrada") or "")[:120]))
+                c[4].caption(md(t.get("estado") or ""))
+                lat = t.get("latencia_ms")
+                c[5].caption(f"{lat / 1000:.1f} s" if isinstance(lat, (int, float)) else "—")
+                abierto = st.session_state.get(sel_key) == t["run_id"]
+                if c[6].button("Ocultar" if abierto else "Cómo razonó", key=f"rz_{t['run_id']}",
+                               type="primary" if abierto else "secondary"):
+                    st.session_state[sel_key] = None if abierto else t["run_id"]
+                    st.rerun()
+                if abierto:
+                    with st.container(border=True):
+                        _detalle_run(t["run_id"])
+            return
         df = pd.DataFrame(filas)
         st.dataframe(df[[c for c in ["created_at", "run_id", "agente", "canal", "usuario", "entrada", "estado",
                                      "latencia_ms"] if c in df.columns]], width="stretch", hide_index=True)
-        if clave == "a2":  # chat: una fila por consulta con su botón "Cómo razonó"
-            st.markdown("#### Consultas del chat")
-            sel_key = "rz_sel_a2"
-            for t in filas[:40]:
-                c = st.columns([6, 2, 2, 1.6])
-                c[0].markdown(f"**{md((t.get('entrada') or '')[:110])}**")
-                c[1].caption(md(t.get("usuario") or "—"))
-                c[2].caption(f"{t.get('agente') or ''} · {(t.get('created_at') or '')[11:16]}")
-                if c[3].button("Cómo razonó", key=f"rz_{t['run_id']}"):
-                    st.session_state[sel_key] = t["run_id"]
-                if st.session_state.get(sel_key) == t["run_id"]:
-                    with st.container(border=True):
-                        st.markdown("**Cómo razonó el agente**")
-                        _detalle_run(t["run_id"])
-            return
         opciones = {f"{t['run_id']} · {t.get('agente')} · {(t.get('entrada') or '')[:60]}": t["run_id"]
                     for t in filas}
         sel = st.selectbox("Ver detalle", list(opciones), key=f"sel_{clave}")
