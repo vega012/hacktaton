@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT))
 
 from app.config import get_settings  # noqa: E402
 from app.normas import db  # noqa: E402
+from app.normas.areas import AREAS, de_json  # noqa: E402
 from app.normas.ingesta import ArchivoRechazado, ingerir  # noqa: E402
 from app.normas.vector import get_store  # noqa: E402
 from scripts.aceptacion_agente1 import discs, doc, estados_indice  # noqa: E402
@@ -98,6 +99,25 @@ def api():
             logging.getLogger(nombre).setLevel(logging.ERROR)
         _CLIENT = TestClient(app)
     return _CLIENT
+
+
+def areas_indice(doc_id: str, esperado: list[str], intentos: int = 8) -> list:
+    """areas_aplica de los chunks de doc_id en el índice (reintenta por la consistencia eventual de Pinecone)."""
+    vistos: list = []
+    for _ in range(intentos):
+        hits = get_store().search("norma artículo", top_k=50, filter={"doc_id": doc_id})
+        vistos = sorted({tuple(h.metadata.get("areas_aplica") or []) for h in hits})
+        if hits and vistos == [tuple(esperado)]:
+            break
+        time.sleep(2)
+    return [list(v) for v in vistos]
+
+
+def areas_doc(d: dict | None) -> str:
+    if not d:
+        return "documento no encontrado"
+    return (f"areas={de_json(d['areas_aplica'])} fuente={d['areas_fuente']} conf={d['areas_confianza']} "
+            f"areas_req={d['areas_requiere_confirmacion']} req_conf_doc={d['requiere_confirmacion']}")
 
 
 def subir_api(path: Path, nombre: str | None = None):
@@ -472,6 +492,107 @@ def escenario_2() -> None:
                           "resueltas, índice 'rechazada'",
          decision("31", "POL-DOC-2023-008", "rechazar",
                   {"estado": "rechazada", "pub": 0, "altas_abiertas": False, "indice": "rechazada"}))
+
+    # ---------------------------------------------------------------- G. áreas de aplicación
+    cargar(f("CU32"))
+
+    def cu32():
+        d = doc("POL-PUB-2026-132")
+        esperado = ["Marketing", "Call Center", "Legal"]
+        idx = areas_indice("POL-PUB-2026-132", esperado)
+        tr = [t.get("areas") for t in traza("POL-PUB-2026-132", "metadatos")]
+        ok = (de_json(d["areas_aplica"]) == esperado and d["areas_fuente"] == "ficha" and d["areas_confianza"] == 1.0
+              and d["areas_requiere_confirmacion"] == 0 and idx == [esperado] and bool(tr) and bool(tr[-1])
+              and tr[-1].get("areas_fuente") == "ficha")
+        return ok, f"{areas_doc(d)}; índice={idx}; traza metadatos.areas={tr[-1] if tr else None}"
+    caso("32", rel("CU32"), "fila 'Áreas de aplicación' de la ficha: fuente ficha, lista exacta, requiere 0, "
+                            "metadato areas_aplica en el índice", cu32)
+
+    cargar(f("CU33"))
+
+    def cu33():
+        d = doc("PRO-COB-2026-133")
+        esperado = ["Cobranzas", "Legal", "RRHH"]
+        idx = areas_indice("PRO-COB-2026-133", esperado)
+        ok = (de_json(d["areas_aplica"]) == esperado and d["areas_fuente"] == "frontmatter"
+              and d["areas_requiere_confirmacion"] == 0 and idx == [esperado])
+        return ok, f"{areas_doc(d)}; índice={idx}"
+    caso("33", rel("CU33"), "frontmatter areas_aplica 'Cobranzas, legal, RR.HH.' -> [Cobranzas, Legal, RRHH], "
+                            "fuente frontmatter, requiere 0", cu33)
+
+    def cu34():
+        d = doc("RES-SINT-2023-009")
+        lista = de_json(d["areas_aplica"])
+        tr = [t.get("areas") for t in traza("RES-SINT-2023-009", "metadatos")]
+        ok = (d["areas_fuente"] == "llm" and d["areas_requiere_confirmacion"] == 1 and all(a in AREAS for a in lista)
+              and bool(tr) and bool(tr[-1]) and tr[-1].get("areas_fuente") == "llm")
+        return ok, f"{areas_doc(d)}; llm={(tr[-1] or {}).get('llm') if tr else None}"
+    caso("34", rel("02"), "sin áreas declaradas: UNA llamada al LLM, fuente llm, requiere 1, todas en la lista "
+                          "(requiere_confirmacion del documento no cambia)", cu34)
+
+    def cu35():
+        doc_id = "RES-SINT-2024-001"
+        nuevas = ["Créditos", "Riesgos"]
+        esperado = [a for a in AREAS if a in nuevas]
+        est0 = doc(doc_id)["estado"]
+        mala = api().put(f"/api/documentos/{doc_id}/areas", json={"areas": ["Ventas"], "usuario": "verificacion"})
+        r = api().put(f"/api/documentos/{doc_id}/areas", json={"areas": nuevas, "usuario": "verificacion"})
+        d = doc(doc_id)
+        idx = areas_indice(doc_id, esperado)
+        est_idx = estados_indice(doc_id, est0)
+        t = traza(doc_id, "edicion_areas")
+        ent = db.query("SELECT entrada FROM trazas_ingesta WHERE doc_id = ? AND paso = 'edicion_areas' "
+                       "ORDER BY id DESC LIMIT 1", (doc_id,))
+        det = api().get(f"/api/documentos/{doc_id}").json()
+        ok = (mala.status_code == 400 and r.status_code == 200 and r.json().get("areas_aplica") == esperado
+              and d["areas_fuente"] == "manual" and d["areas_confianza"] == 1.0 and d["areas_requiere_confirmacion"] == 0
+              and idx == [esperado] and est_idx == {est0} and bool(t) and t[-1]["despues"]["areas_aplica"] == esperado
+              and bool(ent) and "antes" in json.loads(ent[0]["entrada"]) and det.get("areas_aplica") == esperado)
+        return ok, (f"PUT inválida HTTP {mala.status_code}; PUT HTTP {r.status_code} {r.json()}; {areas_doc(d)}; "
+                    f"índice={idx} estado índice={est_idx}; traza edicion_areas={len(t)}")
+    caso("35", rel("31"), "PUT /areas: 400 si no está en la lista; fuente manual, Pinecone actualizado con el mismo "
+                          "estado, paso edicion_areas con antes/después", cu35)
+
+    def cu36():
+        pregunta = "¿Cuál es el límite máximo de la relación cuota-ingreso para un crédito de consumo?"
+        r = api().post("/api/chat", data={"session_id": "cu36", "mensaje": pregunta},
+                       headers={"X-Usuario": "marketing"})
+        j = r.json()
+        citas = j.get("citas") or []
+        ajenas = [c for c in citas if c.get("areas_aplica") and "Marketing" not in c["areas_aplica"]]
+        coherente = all((c.get("nota_area") is not None)
+                        == (bool(c.get("areas_aplica")) and "Marketing" not in c["areas_aplica"]) for c in citas)
+        cons = db.query("SELECT area_usuario FROM consultas WHERE run_id = ?", (j.get("run_id"),))
+        hist = api().get("/api/chat/cu36", headers={"X-Usuario": "marketing"}).json()
+        h_ag = [m for m in hist if m["rol"] == "agente"]
+        pay = (h_ag[-1]["payload"] or {}) if h_ag else {}
+        nota = "Esta norma no es de tu área (Marketing), pero te aplica."
+        ok = (r.status_code == 200 and j.get("area_usuario") == "Marketing" and bool(ajenas) and coherente
+              and all(c["nota_area"] == nota for c in ajenas)
+              and bool(cons) and cons[0]["area_usuario"] == "Marketing"
+              and pay.get("area_usuario") == "Marketing"
+              and any(c.get("nota_area") for c in pay.get("citas") or []))
+        return ok, (f"HTTP {r.status_code} area_usuario={j.get('area_usuario')} confianza={j.get('confianza')}; citas="
+                    f"{[(c.get('doc_id'), c.get('areas_aplica'), bool(c.get('nota_area'))) for c in citas]}; "
+                    f"consultas.area_usuario={cons[0]['area_usuario'] if cons else None}; "
+                    f"historial enriquecido={pay.get('area_usuario')}")
+    caso("36", rel("31"), "chat de usuario marketing sobre norma sin Marketing: nota_area en la cita, area_usuario "
+                          "en respuesta, consulta e historial", cu36)
+
+    def cu37():
+        ejemplos = api().get("/api/chat/ejemplos").json()
+        texto = ejemplos[0]["texto"] if ejemplos else ""
+        r = api().post("/api/chat", data={"session_id": "cu37", "mensaje": texto}, headers={"X-Usuario": "marketing"})
+        j = r.json()
+        dic = j.get("dictamen") or {}
+        evs = [e for e in dic.get("evaluaciones") or [] if e.get("doc_id")]
+        ok = (r.status_code == 200 and j.get("tipo") == "caso" and bool(dic.get("areas_a_coordinar"))
+              and all("areas_aplica" in e and "nota_area" in e for e in evs)
+              and set(dic["areas_a_coordinar"]) <= set(AREAS))
+        return ok, (f"HTTP {r.status_code} tipo={j.get('tipo')} conclusion={dic.get('conclusion')} "
+                    f"areas_a_coordinar={dic.get('areas_a_coordinar')} evaluaciones={len(evs)}")
+    caso("37", "../corpus/casos (ejemplo 1)", "caso: dictamen.areas_a_coordinar = unión de áreas de las normas "
+                                              "citadas", cu37)
 
 
 def main() -> None:

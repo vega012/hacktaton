@@ -12,7 +12,7 @@
 	handle @chat {
 		forward_auth app:8000 {
 			uri /auth/check?rol=empleado
-			copy_headers X-Usuario X-Rol
+			copy_headers X-Usuario X-Rol X-Area
 			# la verificación es un GET normal: sin los encabezados del websocket de Streamlit
 			header_up -Connection
 			header_up -Upgrade
@@ -24,7 +24,7 @@
 	handle @api {
 		forward_auth app:8000 {
 			uri /auth/check?rol=admin
-			copy_headers X-Usuario X-Rol
+			copy_headers X-Usuario X-Rol X-Area
 			# la verificación es un GET normal: sin los encabezados del websocket de Streamlit
 			header_up -Connection
 			header_up -Upgrade
@@ -35,7 +35,7 @@
 	handle {
 		forward_auth app:8000 {
 			uri /auth/check?rol=admin
-			copy_headers X-Usuario X-Rol
+			copy_headers X-Usuario X-Rol X-Area
 			# la verificación es un GET normal: sin los encabezados del websocket de Streamlit
 			header_up -Connection
 			header_up -Upgrade

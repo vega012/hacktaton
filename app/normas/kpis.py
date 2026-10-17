@@ -114,7 +114,7 @@ def calcular(desde: str | None = None, hasta: str | None = None, umbral: float |
     consultas = db.query(
         "SELECT id, pregunta, tema, confianza, top_score, citas_json, created_at, tipo, n_citas_propuestas,"
         " n_citas_verificadas, confianza_score, advertencia_conflicto, advertencia_obsoleta,"
-        f" motivo_sin_cobertura FROM consultas{where} ORDER BY created_at", params)
+        f" motivo_sin_cobertura, area_usuario FROM consultas{where} ORDER BY created_at", params)
     con_dato = [c for c in consultas if c.get("n_citas_verificadas") is not None]
     den = len(con_dato)
     por_tipo = Counter(c["tipo"] or "sin_dato" for c in consultas)
@@ -262,4 +262,34 @@ def calcular(desde: str | None = None, hasta: str | None = None, umbral: float |
 
     return {"rango": {"desde": desde, "hasta": hasta}, "backend": backend, "umbral": umbral,
             "generado_at": db.now(), "calidad": calidad, "prevencion": prevencion, "eficiencia": eficiencia,
-            "trazabilidad": trazabilidad, "tendencia": tendencia}
+            "trazabilidad": trazabilidad, "tendencia": tendencia,
+            "por_area": _por_area(consultas, motivos, d, h)}
+
+
+SIN_AREA = "sin área"
+
+
+def _por_area(consultas: list[dict[str, Any]], motivos: dict[int, str | None], d: str | None,
+              h: str | None) -> dict[str, Any]:
+    """Consultas y brechas por área del USUARIO que preguntó; documentos por área de aplicación de la norma."""
+    from app.normas.areas import de_json
+    n_cons = Counter(c.get("area_usuario") or SIN_AREA for c in consultas)
+    brechas: dict[str, list[str]] = defaultdict(list)
+    for c in consultas:  # mismo criterio que el KPI 2 (sin cobertura)
+        if motivos[c["id"]] in ("no_encontro", "score_bajo"):
+            brechas[c.get("area_usuario") or SIN_AREA].append(c["pregunta"])
+    bw, bp = _where(d, h, "b.created_at")
+    for b in db.query("SELECT b.descripcion, c.area_usuario FROM brechas b LEFT JOIN consultas c ON c.id = b.consulta_id"
+                      f"{bw}", bp):
+        brechas[b["area_usuario"] or SIN_AREA].append(b["descripcion"])
+    n_docs: Counter = Counter()
+    for x in db.query("SELECT areas_aplica FROM documentos WHERE estado = 'vigente' AND publicado = 1"):
+        for a in de_json(x["areas_aplica"]) or [SIN_AREA]:
+            n_docs[a] += 1
+    orden = lambda kv: (-kv[1], kv[0])  # noqa: E731
+    return {
+        "consultas": [{"area": a, "n": n} for a, n in sorted(n_cons.items(), key=orden)],
+        "brechas": sorted(({"area": a, "n": len(v), "ejemplos": v[:3]} for a, v in brechas.items()),
+                          key=lambda x: (-x["n"], x["area"])),
+        "documentos": [{"area": a, "n": n} for a, n in sorted(n_docs.items(), key=orden)],
+    }

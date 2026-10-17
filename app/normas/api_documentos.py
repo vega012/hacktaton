@@ -14,7 +14,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.normas import db
-from app.normas.ingesta import DECISIONES, ArchivoRechazado, decidir, es_archivo_prohibido, procesar, recibir
+from app.normas.areas import AREAS, de_json
+from app.normas.ingesta import (DECISIONES, ArchivoRechazado, decidir, editar_areas, es_archivo_prohibido, procesar,
+                                recibir)
 
 log = logging.getLogger("api_documentos")
 router = APIRouter(tags=["documentos"])
@@ -23,7 +25,8 @@ UPLOADS = db.ROOT / "data" / "uploads"
 EXTENSIONES = (".pdf", ".docx", ".txt", ".md")
 COLS_DOC = ("doc_id, codigo, nombre_norma, entidad, tipo_fuente, tema, fecha_emision, fecha_vigencia, estado, "
             "estado_inferido, version, reemplaza_a, reemplazada_por, publicado, requiere_confirmacion, "
-            "estado_ingesta, etapa, mensaje_ingesta, n_chunks, run_id, created_at")
+            "estado_ingesta, etapa, mensaje_ingesta, n_chunks, run_id, created_at, areas_aplica, areas_fuente, "
+            "areas_confianza, COALESCE(areas_requiere_confirmacion, 1) AS areas_requiere_confirmacion")
 COLS_DISC = ("x.id, x.tema, x.severidad, x.tipo, x.doc_a, x.chunk_a, x.art_a, x.version_a, x.cita_a, x.doc_b, "
              "x.chunk_b, x.art_b, x.version_b, x.cita_b, x.prevalece, x.motivo, x.explicacion, "
              "COALESCE(x.estado, 'abierta') AS estado, x.estado_revision, x.comentario, x.run_id, x.created_at, "
@@ -34,11 +37,17 @@ ETAPAS = ("recibido", "extrayendo_metadatos", "indexando", "comparando", "inform
           "error")
 
 
+def _areas(d: dict) -> dict:
+    if "areas_aplica" in d:
+        d["areas_aplica"] = de_json(d["areas_aplica"])
+    return d
+
+
 def _doc(doc_id: str, cols: str = COLS_DOC) -> dict:
     rows = db.query(f"SELECT {cols} FROM documentos WHERE doc_id = ?", (doc_id,))
     if not rows:
         raise HTTPException(404, f"Documento {doc_id} no encontrado")
-    return rows[0]
+    return _areas(rows[0])
 
 
 @router.post("/documentos", status_code=202)
@@ -76,7 +85,28 @@ async def subir_documento(archivo: UploadFile = File(...)) -> JSONResponse:
 
 @router.get("/documentos")
 def listar_documentos() -> list[dict]:
-    return db.query(f"SELECT {COLS_DOC} FROM documentos ORDER BY created_at DESC, rowid DESC")
+    return [_areas(d) for d in db.query(f"SELECT {COLS_DOC} FROM documentos ORDER BY created_at DESC, rowid DESC")]
+
+
+@router.get("/areas")
+def listar_areas() -> list[str]:
+    return list(AREAS)
+
+
+class EdicionAreas(BaseModel):
+    areas: list[str]
+    usuario: str | None = None
+
+
+@router.put("/documentos/{doc_id}/areas")
+def editar_areas_documento(doc_id: str, body: EdicionAreas) -> dict:
+    _doc(doc_id, "doc_id")
+    try:
+        return editar_areas(doc_id, body.areas, body.usuario or "web")
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except KeyError as e:
+        raise HTTPException(404, f"Documento {doc_id} no encontrado") from e
 
 
 @router.get("/documentos/{doc_id}/progreso")

@@ -7,6 +7,9 @@ Pasos (cada uno deja una fila en trazas_ingesta):
   recepcion      archivo, sha256 (si ya existe: duplicado=true, no se reindexa)
   metadatos      frontmatter si existe; si no, LLM con confianza 0-1 por campo; faltante = null
                  + requiere_confirmacion. Valida fechas. Estado no declarado -> inferido (estado_inferido=1).
+                 Áreas de aplicación (resolver_areas): ficha/frontmatter o UNA llamada corta al LLM (lista cerrada,
+                 areas_requiere_confirmacion aparte); van como `areas_aplica` en cada chunk del índice.
+  edicion_areas  corrección humana de las áreas (editar_areas, PUT /api/documentos/{id}/areas).
   chunks         por artículo / disposición final, ids determinísticos {codigo}_{version}_art-N.
                  Poco texto o sin artículos -> estado_ingesta=requiere_revision, NO se indexa.
   afirmaciones / candidatos / comparacion / discrepancia_*  -> app/normas/validacion.py
@@ -28,9 +31,10 @@ from pathlib import Path
 from typing import Any
 
 from app.config import get_settings
+from app.normas import areas as areas_mod
 from app.normas import db
 from app.normas.chunking import chunkear
-from app.normas.parsing import parsear, separar_frontmatter
+from app.normas.parsing import FM_RE, parsear, separar_frontmatter
 from app.normas.vector import fecha_int, get_store
 
 log = logging.getLogger("ingesta")
@@ -270,6 +274,70 @@ def resolver_metadatos(fm: dict[str, Any], provistos: dict[str, Any] | None, tex
             "estado_inferido": estado_inferido, "advertencias": adv, "llm": llm_info}
 
 
+# ---------------------------------------------------------------------------- áreas de aplicación
+def resolver_areas(fm: dict[str, Any], fm_origen: str | None, texto: str, nombre: str | None,
+                   doc_id: str | None, usuario: str | None) -> dict[str, Any]:
+    """-> {areas_aplica, areas_fuente, areas_confianza, areas_requiere_confirmacion, descartadas, llm}
+
+    Declaradas (fila "Áreas de aplicación" de la ficha o `areas_aplica` del frontmatter) -> confianza 1.0.
+    Si no: UNA llamada corta al LLM restringida a la lista cerrada -> requiere confirmación humana.
+    Nunca se devuelve un área fuera de AREAS. No afecta `requiere_confirmacion` del documento.
+    """
+    declarado = next((fm[k] for k in ("areas_aplica", "areas", "areas_de_aplicacion") if fm.get(k)), None)
+    descartadas: list[str] = []
+    if declarado:
+        lista, descartadas = areas_mod.normalizar_con_descartes(declarado)
+        if lista:
+            return {"areas_aplica": lista, "areas_fuente": fm_origen or "frontmatter", "areas_confianza": 1.0,
+                    "areas_requiere_confirmacion": int(bool(descartadas)), "declarado": declarado,
+                    "descartadas": descartadas, "llm": None}
+    if len(re.sub(r"\s", "", texto or "")) < 50:  # sin texto: no se consulta al LLM
+        return {"areas_aplica": [], "areas_fuente": "llm", "areas_confianza": 0.0,
+                "areas_requiere_confirmacion": 1, "declarado": declarado, "descartadas": descartadas,
+                "llm": None, "motivo": "sin texto: no se consultó al LLM"}
+    prompt = (
+        "¿A qué áreas de un banco aplica esta norma o política (quiénes deben cumplirla o conocerla)? "
+        f"Elige SOLO de esta lista cerrada: {json.dumps(areas_mod.AREAS, ensure_ascii=False)}. "
+        "No inventes áreas fuera de la lista. Responde SOLO un objeto JSON "
+        '{"areas": ["..."], "confianza": número 0-1}.\n\n'
+        f"Título: {nombre or ''}\nTexto (inicio):\n{(texto or '')[:4000]}"
+    )
+    data, info = llm_json(prompt, doc_id, "metadatos", usuario, {"campo": "areas_aplica"})
+    lista, desc_llm = areas_mod.normalizar_con_descartes(data.get("areas") if isinstance(data, dict) else None)
+    try:
+        cf = max(0.0, min(1.0, float(data.get("confianza")))) if isinstance(data, dict) and lista else 0.0
+    except (TypeError, ValueError):
+        cf = 0.5 if lista else 0.0
+    llm = {k: info.get(k) for k in ("modelo", "tokens", "latencia_ms", "error") if info.get(k) is not None}
+    return {"areas_aplica": lista, "areas_fuente": "llm", "areas_confianza": round(cf, 2),
+            "areas_requiere_confirmacion": 1, "declarado": declarado, "descartadas": descartadas + desc_llm,
+            "llm": llm}
+
+
+def editar_areas(doc_id: str, nuevas: list[str], usuario: str | None = None) -> dict[str, Any]:
+    """Corrección humana de las áreas: BD (fuente manual) + re-upsert de los chunks con el mismo estado."""
+    lista, descartadas = areas_mod.normalizar_con_descartes(nuevas)
+    if descartadas:
+        raise ValueError(f"Áreas no válidas: {descartadas}. Válidas: {areas_mod.AREAS}")
+    rows = db.query("SELECT doc_id, estado, areas_aplica, areas_fuente, areas_confianza, "
+                    "areas_requiere_confirmacion FROM documentos WHERE doc_id = ?", (doc_id,))
+    if not rows:
+        raise KeyError(doc_id)
+    antes = rows[0]
+    with LOCK:
+        _set(doc_id, areas_aplica=json.dumps(lista, ensure_ascii=False), areas_fuente="manual", areas_confianza=1.0,
+             areas_requiere_confirmacion=0)
+        n = reindexar(doc_id)  # mismo estado que ya tenía (records_de usa documentos.estado)
+        db.traza_ingesta(doc_id, "edicion_areas",
+                         {"antes": {"areas_aplica": areas_mod.de_json(antes["areas_aplica"]),
+                                    "areas_fuente": antes["areas_fuente"], "areas_confianza": antes["areas_confianza"],
+                                    "areas_requiere_confirmacion": antes["areas_requiere_confirmacion"]}},
+                         {"despues": {"areas_aplica": lista, "areas_fuente": "manual", "areas_confianza": 1.0,
+                                      "areas_requiere_confirmacion": 0},
+                          "chunks_reindexados": n, "estado_indice": antes["estado"]}, usuario=usuario)
+    return {"ok": True, "areas_aplica": lista}
+
+
 # ---------------------------------------------------------------------------- vector store
 def temas_por_chunk(doc_id: str) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
@@ -286,6 +354,7 @@ def records_de(doc_id: str, estado: str | None = None) -> list[dict[str, Any]]:
         return []
     d = docs[0]
     temas = temas_por_chunk(doc_id)
+    areas = areas_mod.de_json(d.get("areas_aplica"))
     out = []
     for c in db.query("SELECT * FROM chunks WHERE doc_id = ? ORDER BY rowid", (doc_id,)):
         etiqueta = f"Art. {c['articulo']}" if str(c["articulo"]).isdigit() else c["articulo"]
@@ -300,6 +369,8 @@ def records_de(doc_id: str, estado: str | None = None) -> list[dict[str, Any]]:
         }
         if temas.get(c["chunk_id"]):
             rec["temas"] = temas[c["chunk_id"]]
+        if areas:
+            rec["areas_aplica"] = areas
         out.append(rec)
     return out
 
@@ -403,6 +474,7 @@ def recibir(path: str | Path, metadatos: dict[str, Any] | None = None, usuario: 
     paginas, basura, motivo = parsear(path)
     texto_total = "\n".join(t for _, t in paginas)
     fm, _ = separar_frontmatter(texto_total)
+    fm_origen = "frontmatter" if FM_RE.match(texto_total or "") else ("ficha" if fm else None)
     if fm and paginas:  # el frontmatter no es contenido normativo
         _, cuerpo1 = separar_frontmatter(paginas[0][1])
         paginas = [(paginas[0][0], cuerpo1)] + paginas[1:]
@@ -435,7 +507,8 @@ def recibir(path: str | Path, metadatos: dict[str, Any] | None = None, usuario: 
                       "texto_insuficiente": basura, "motivo": motivo or None}, usuario=usuario)
     return {"doc_id": doc_id, "codigo": codigo, "duplicado": False, "estado_ingesta": "procesando",
             "path": str(path), "nombre": nombre, "sha": sha, "paginas": paginas, "frontmatter": fm,
-            "metadatos": metadatos, "basura": basura, "motivo": motivo, "usuario": usuario}
+            "metadatos": metadatos, "basura": basura, "motivo": motivo, "usuario": usuario,
+            "fm_origen": fm_origen}
 
 
 def procesar(ctx: dict[str, Any], validar: bool = True, canal: str = "web") -> dict[str, Any]:
@@ -470,6 +543,8 @@ def _procesar(ctx: dict[str, Any], validar: bool, canal: str) -> dict[str, Any]:
         r["fuente"]["reemplaza_a"] = "clausula_derogacion"
         r["confianza"]["reemplaza_a"] = 1.0
     tipo_fuente = tipo_fuente_de(meta["entidad"])
+    ar = resolver_areas(ctx.get("frontmatter") or {}, ctx.get("fm_origen"), texto, meta["nombre"] or ctx.get("nombre"),
+                        doc_id, usuario)
     md = {"campos": meta, "fuente": r["fuente"], "origen": r["origen"], "faltantes": r["faltantes"],
           "baja_confianza": r["baja_confianza"], "advertencias": r["advertencias"], "deroga": deroga,
           "archivo": ctx.get("nombre")}
@@ -478,13 +553,15 @@ def _procesar(ctx: dict[str, Any], validar: bool, canal: str) -> dict[str, Any]:
          fecha_vigencia=meta["fecha_vigencia"], version=meta["version"] or "1", reemplaza_a=meta["reemplaza_a"],
          metadatos_json=json.dumps(md, ensure_ascii=False), confianza_json=json.dumps(r["confianza"]),
          requiere_confirmacion=r["requiere_confirmacion"], estado_inferido=r["estado_inferido"],
+         areas_aplica=json.dumps(ar["areas_aplica"], ensure_ascii=False), areas_fuente=ar["areas_fuente"],
+         areas_confianza=ar["areas_confianza"], areas_requiere_confirmacion=ar["areas_requiere_confirmacion"],
          confirmado=int(r["origen"] in ("frontmatter", "provisto") and not r["requiere_confirmacion"]))
     llm = r.get("llm") or {}
     db.traza_ingesta(doc_id, "metadatos", {"origen": r["origen"]},
                      {"metadatos": meta, "confianza": r["confianza"], "fuente": r["fuente"], "tipo": tipo_fuente,
                       "requiere_confirmacion": bool(r["requiere_confirmacion"]), "faltantes": r["faltantes"],
                       "estado_inferido": bool(r["estado_inferido"]), "advertencias": r["advertencias"],
-                      "deroga": deroga},
+                      "deroga": deroga, "areas": ar},
                      llm.get("modelo") if llm else None, llm.get("tokens") if llm else None,
                      llm.get("latencia_ms") if llm else int((time.perf_counter() - t0) * 1000), usuario)
 

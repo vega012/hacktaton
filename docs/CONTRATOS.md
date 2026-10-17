@@ -151,7 +151,9 @@ Call Center, Operaciones, Auditoría, Legal, Contabilidad, Archivo, RRHH.
   `areas_fuente=manual`, `areas_requiere_confirmacion=0`, paso `edicion_areas` en trazas_ingesta).
 - `GET /api/usuarios` -> `[{usuario, rol: admin|empleado, area, created_at}]`;
   `POST /api/usuarios` `{usuario, clave, rol, area}` -> `{ok}` (400 si el área no está en la lista o el usuario existe).
-- `GET /auth/me` -> `{usuario, rol, area}`; `/auth/check` agrega el header `X-Area`.
+- `GET /auth/me` -> `{usuario, rol, area}`; `/auth/check` agrega el header `X-Area`
+  (percent-encoded porque las cabeceras HTTP son ASCII: `Cr%C3%A9ditos`; `/api/chat` la decodifica y, si no viene,
+  busca el área del usuario `X-Usuario` en la tabla `usuarios`).
 - `POST /api/chat`: cada cita agrega `areas_aplica: [str]` y `nota_area: str|null`
   ("Esta norma no es de tu área (<area>), pero te aplica." cuando el área del usuario no está en la norma);
   respuesta agrega `area_usuario`; `dictamen.areas_a_coordinar: [str]` (unión de áreas de las normas citadas).

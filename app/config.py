@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     admin_password: str = ""
     empleado_user: str = "empleado"
     empleado_password: str = ""
+    admin_area: str = "Cumplimiento"
+    empleado_area: str = "Créditos"
+    marketing_user: str = "marketing"
+    marketing_password: str = ""
+    marketing_area: str = "Marketing"
     auth_secret: str = "cambiar-este-secreto"
 
     # Comportamiento del cliente LLM

@@ -1,6 +1,6 @@
 """Genera los archivos de prueba del catálogo de casos de uso del Agente 1 en normas/casos_uso/.
 
-    PYTHONIOENCODING=utf-8 .venv/Scripts/python scripts/generar_casos_uso.py
+    PYTHONIOENCODING=utf-8 .venv/Scripts/python scripts/generar_casos_uso.py [--solo-areas]
 
 Todos los documentos son FICTICIOS (entidades "SBS — DOCUMENTO SINTÉTICO PARA DEMO" y
 "Banco Andino (ficticio) — DOCUMENTO SINTÉTICO PARA DEMO") y usan códigos que no existen en normas/.
@@ -215,6 +215,31 @@ MD = ("CU24b_pro-rec-2026-112_frontmatter.md", dict(
         ("Informe", "El resultado de la recuperación se informa al Comité de Riesgos."),
     ]))
 
+# G32 — PDF con fila "Áreas de aplicación" en la ficha (áreas declaradas)
+AREAS_PDF = ("CU32_pol-pub-2026-132_areas_en_ficha.pdf", dict(
+    titulo="Política de Publicidad y Comunicación Comercial de Créditos",
+    ficha=ficha("POL-PUB-2026-132", BANCO, "2026-06-01", "2026-07-01", "vigente", "1.0", "Ninguna")
+    + [("Áreas de aplicación", "Marketing, Call Center, Legal")],
+    articulos=[
+        ("Alcance", "Aplica a toda pieza publicitaria y guion comercial que ofrezca créditos del Banco Andino "
+                    "(ficticio), en cualquier canal."),
+        ("Información veraz", "Toda publicidad de créditos informa la tasa de costo efectivo anual de forma "
+                              "visible y no omite condiciones relevantes para el cliente."),
+        ("Revisión previa", "El área Legal revisa y aprueba cada campaña y cada guion del centro de llamadas "
+                            "antes de su difusión."),
+    ]))
+# G33 — MD con `areas_aplica` en el frontmatter (variantes que se normalizan: legal, RR.HH.)
+AREAS_MD = ("CU33_pro-cob-2026-133_areas_frontmatter.md", dict(
+    titulo="Procedimiento de Cobranza Responsable",
+    yaml={"nombre_norma": "Procedimiento de Cobranza Responsable", "codigo": "PRO-COB-2026-133",
+          "entidad_emisora": BANCO, "fecha_emision": "2026-06-08", "fecha_vigencia": "2026-07-01",
+          "estado": "vigente", "version": "1.0", "reemplaza_a": "", "areas_aplica": "Cobranzas, legal, RR.HH."},
+    articulos=[
+        ("Trato al cliente", "La gestión de cobranza se realiza con respeto, sin amenazas ni mensajes a terceros."),
+        ("Horario", "Las llamadas de cobranza se realizan solo en el horario que autoriza la política comercial."),
+        ("Capacitación", "Recursos Humanos capacita al personal de cobranzas en trato responsable cada año."),
+    ]))
+
 NO_SUBIR = ("CU28_notas_internas_NO_SUBIR.md",
             "# Notas internas del equipo (NO SUBIR)\n\n"
             "> Aviso: documento ficticio creado solo para pruebas del hackathon. No es una norma real.\n\n"
@@ -342,8 +367,20 @@ def verificar(path: Path, esperado: dict | None) -> str:
 def esperado_de(fic: list[tuple[str, str]]) -> dict:
     clave = {"Código": "codigo", "Entidad emisora": "entidad_emisora", "Fecha de emisión": "fecha_emision",
              "Fecha de vigencia": "fecha_vigencia", "Estado": "estado", "Versión": "version",
-             "Reemplaza a": "reemplaza_a"}
+             "Reemplaza a": "reemplaza_a", "Áreas de aplicación": "areas_aplica"}
     return {clave[k]: (None if v in ("Ninguna", "—") else v) for k, v in fic}
+
+
+def generar_areas(page, informe: list) -> None:
+    """G32-G33: áreas de aplicación declaradas (ficha del PDF y frontmatter del MD)."""
+    nombre, d = AREAS_PDF
+    cod, ver = dict(d["ficha"])["Código"], dict(d["ficha"])["Versión"]
+    pdf(page, html_doc(d), OUT / nombre, f"{cod} — v{ver}")
+    informe.append((nombre, verificar(OUT / nombre, esperado_de(d["ficha"]))))
+    nombre, d = AREAS_MD
+    md(OUT / nombre, d)
+    informe.append((nombre, verificar(OUT / nombre, {"codigo": d["yaml"]["codigo"],
+                                                     "areas_aplica": d["yaml"]["areas_aplica"]})))
 
 
 def main() -> None:
@@ -351,6 +388,15 @@ def main() -> None:
 
     OUT.mkdir(parents=True, exist_ok=True)
     informe = []
+    if "--solo-areas" in sys.argv:  # solo CU32/CU33 (no regenera los demás archivos)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(channel="chrome")
+            generar_areas(browser.new_page(), informe)
+            browser.close()
+        print(f"Generados en {OUT}:")
+        for n, r in informe:
+            print(f"  {n:<55} {r}")
+        return
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome")
         page = browser.new_page()
@@ -367,6 +413,7 @@ def main() -> None:
         pdf(page, f"<!doctype html><html><body style='margin:0'><img src='data:image/png;base64,{b64}' "
                   f"style='width:100%'></body></html>", OUT / "CU26_escaneado_sin_texto.pdf", None)
         informe.append(("CU26_escaneado_sin_texto.pdf", verificar(OUT / "CU26_escaneado_sin_texto.pdf", None)))
+        generar_areas(page, informe)
         browser.close()
 
     nombre, d = DOCX

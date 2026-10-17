@@ -107,20 +107,31 @@ CREATE TABLE IF NOT EXISTS brechas (
     tema TEXT, descripcion TEXT,
     created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS usuarios (
+    usuario TEXT PRIMARY KEY,
+    clave_hash TEXT NOT NULL,        -- pbkdf2_sha256$<iteraciones>$<sal hex>$<hash hex>
+    rol TEXT NOT NULL,               -- admin | empleado
+    area TEXT,                       -- una de app/normas/areas.py: AREAS
+    created_at TEXT
+);
 """
 
 # Columnas agregadas después (KPIs). Filas viejas quedan en NULL = sin dato.
 MIGRACIONES = {
     "consultas": [("tipo", "TEXT"), ("n_citas_propuestas", "INTEGER"), ("n_citas_verificadas", "INTEGER"),
                   ("confianza_score", "REAL"), ("advertencia_conflicto", "INTEGER"),
-                  ("advertencia_obsoleta", "INTEGER"), ("motivo_sin_cobertura", "TEXT")],
+                  ("advertencia_obsoleta", "INTEGER"), ("motivo_sin_cobertura", "TEXT"),
+                  ("area_usuario", "TEXT")],
     "trazas": [("started_at", "TEXT"), ("finished_at", "TEXT")],
     "documentos": [("reemplazada_por", "TEXT"), ("estado_actualizado_at", "TEXT"),
                    # Agente 1 (ingesta y validación)
                    ("codigo", "TEXT"), ("publicado", "INTEGER"), ("metadatos_json", "TEXT"),
                    ("confianza_json", "TEXT"), ("requiere_confirmacion", "INTEGER"),
                    ("estado_inferido", "INTEGER"), ("tipo_fuente", "TEXT"),
-                   ("etapa", "TEXT"), ("mensaje_ingesta", "TEXT")],
+                   ("etapa", "TEXT"), ("mensaje_ingesta", "TEXT"),
+                   # áreas de aplicación (lista JSON de app/normas/areas.py: AREAS)
+                   ("areas_aplica", "TEXT"), ("areas_fuente", "TEXT"), ("areas_confianza", "REAL"),
+                   ("areas_requiere_confirmacion", "INTEGER")],
     "discrepancias": [("tema", "TEXT"), ("art_a", "TEXT"), ("art_b", "TEXT"), ("version_a", "TEXT"),
                       ("version_b", "TEXT"), ("prevalece", "TEXT"), ("motivo", "TEXT"), ("estado", "TEXT")],
 }

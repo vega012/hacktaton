@@ -28,6 +28,11 @@ async def lifespan(_: FastAPI):
         log.warning("DEEPSEEK_API_KEY no está configurada")
     if not settings.pinecone_api_key:
         log.warning("PINECONE_API_KEY no está configurada: se usa el índice local de respaldo")
+    try:
+        from app.normas import usuarios
+        usuarios.sembrar()
+    except Exception:
+        log.exception("No se pudieron sembrar los usuarios desde .env")
     yield
 
 

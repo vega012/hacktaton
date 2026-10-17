@@ -22,7 +22,11 @@ FM_RE = re.compile(r"\A﻿?\s*---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re
 FICHA = {"código": "codigo", "codigo": "codigo", "entidad emisora": "entidad_emisora",
          "fecha de emisión": "fecha_emision", "fecha de emision": "fecha_emision",
          "fecha de vigencia": "fecha_vigencia", "estado": "estado", "versión": "version", "version": "version",
-         "reemplaza a": "reemplaza_a"}
+         "reemplaza a": "reemplaza_a",
+         "áreas de aplicación": "areas_aplica", "areas de aplicacion": "areas_aplica",
+         "áreas de aplicacion": "areas_aplica", "areas de aplicación": "areas_aplica"}
+# Variante en línea: "Áreas de aplicación: Marketing, Legal"
+AREAS_INLINE_RE = re.compile(r"^[áa]reas\s+de\s+aplicaci[óo]n\s*:\s*(.+)$", re.IGNORECASE)
 SIN_VALOR = {"", "ninguna", "ninguno", "no aplica", "n/a", "-", "—"}
 # Encabezado/pie que se repite en cada página del PDF ("RES-SINT-2024-001 — v2.0", "Página 2")
 CABECERA_RE = re.compile(r"^[ 	]*(?:[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+[ 	]+[—-][ 	]+v[\d.]+|P[áa]gina[ 	]+\d+(?:[ 	]+de[ 	]+\d+)?)[ 	]*$",
@@ -41,6 +45,12 @@ def separar_ficha(texto: str) -> tuple[dict[str, str | None], str]:
     m_art = ART_RE.search(texto or "")
     cabeza = texto[: m_art.start()] if m_art else (texto or "")[:3000]
     lineas = [l.strip() for l in cabeza.splitlines()]
+    inline = None
+    for i, l in enumerate(lineas):
+        m_in = AREAS_INLINE_RE.match(l)
+        if m_in:
+            inline = m_in.group(1).strip()
+            lineas[i] = ""
     idx = [i for i, l in enumerate(lineas) if l.lower() in FICHA]
     if "codigo" not in {FICHA[lineas[i].lower()] for i in idx}:
         return {}, texto
@@ -54,6 +64,8 @@ def separar_ficha(texto: str) -> tuple[dict[str, str | None], str]:
             valor.append(l)
         v = " ".join(valor).strip()
         fm[FICHA[lineas[i].lower()]] = None if v.lower() in SIN_VALOR else v
+    if inline and not fm.get("areas_aplica"):
+        fm["areas_aplica"] = inline
     nombre = " ".join(l for l in lineas[: idx[0]] if l).strip()
     if nombre:
         fm["nombre_norma"] = nombre

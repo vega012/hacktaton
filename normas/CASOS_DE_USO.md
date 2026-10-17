@@ -74,6 +74,22 @@ discrepancias* (tarjetas A | B con cita literal, severidad y «Prevalece»). Arr
 En la demo los tres botones se aplican sobre el caso 9; la verificación usa 12 y 13 para probar los tres desde el
 mismo estado inicial (`pendiente_revision` con ALTA abierta).
 
+## G. Áreas de aplicación
+
+Lista cerrada (`app/normas/areas.py`): Riesgos, Créditos, Agencias, Cumplimiento, Marketing, Cobranzas, Call Center,
+Operaciones, Auditoría, Legal, Contabilidad, Archivo, RRHH. Se compara sin tildes ni mayúsculas y acepta variantes
+obvias («callcenter», «RR.HH.», «Recursos Humanos»); lo que no está en la lista se descarta y queda en la traza.
+Las áreas **no** cambian `requiere_confirmacion` del documento: tienen su propio `areas_requiere_confirmacion`.
+
+| Nº | Caso | Archivo(s) | Orden / precondición | Qué hace el sistema | Qué se ve | Verificación |
+|---|---|---|---|---|---|---|
+| 32 | Áreas declaradas en la ficha | `casos_uso/CU32_pol-pub-2026-132_areas_en_ficha.pdf` (fila «Áreas de aplicación: Marketing, Call Center, Legal») | ninguna | `areas_aplica = [Marketing, Call Center, Legal]`, `areas_fuente = ficha`, confianza 1.0, `areas_requiere_confirmacion = 0`; metadato `areas_aplica` (lista) en cada chunk del índice; resultado en el paso `metadatos` de la traza | Chips de áreas en el documento | PASS |
+| 33 | Áreas en el frontmatter | `casos_uso/CU33_pro-cob-2026-133_areas_frontmatter.md` (`areas_aplica: Cobranzas, legal, RR.HH.`) | ninguna | Normaliza a `[Cobranzas, Legal, RRHH]`, `areas_fuente = frontmatter`, requiere 0 | Igual que 32 | PASS |
+| 34 | Sin áreas declaradas | `02_res-sint-2023-009.pdf` (cualquier norma sin la fila) | ninguna | UNA llamada corta al LLM restringida a la lista → `areas_fuente = llm`, confianza del LLM, `areas_requiere_confirmacion = 1`; si el LLM falla: lista vacía y requiere 1; nunca un área fuera de la lista | «Áreas sugeridas: confirmar» | PASS |
+| 35 | Corrección humana de áreas | `PUT /api/documentos/RES-SINT-2024-001/areas` `{areas: [Créditos, Riesgos]}` | 31 cargada | 400 si un área no está en la lista; si es válida: `areas_fuente = manual`, confianza 1, requiere 0, re-upsert de sus chunks con la nueva lista y el **mismo estado**, paso `edicion_areas` con antes/después | Chips actualizados | PASS |
+| 36 | Norma de otra área en el chat | `POST /api/chat` como `marketing` (área Marketing): «¿límite de la relación cuota-ingreso…?» | 35 (31 sin Marketing) | Cada cita trae `areas_aplica` y `nota_area` = «Esta norma no es de tu área (Marketing), pero te aplica.»; la respuesta trae `area_usuario`; se guarda en `consultas.area_usuario` y en el historial | Nota bajo la cita | PASS |
+| 37 | Caso con varias áreas | `POST /api/chat` con el caso de ejemplo 1 (`corpus/casos/CASO-01.txt`) | base cargada | `dictamen.areas_a_coordinar` = unión (orden de la lista) de las áreas de las normas citadas en el dictamen; cada evaluación con `doc_id` trae `areas_aplica` y `nota_area` | «Áreas a coordinar» en el dictamen | PASS |
+
 ## Bugs y brechas observados
 
 1. ~~PDF 18 no se indexa~~ **Corregido**: `MIN_CHARS` bajó de 120 a 60 (caracteres sin espacios, sin la ficha).
