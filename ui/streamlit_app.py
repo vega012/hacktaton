@@ -22,17 +22,97 @@ except Exception:
     API = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
 API = API.rstrip("/") + "/api"
 
-st.set_page_config(page_title="Normativa Bancaria · Agentes de IA", page_icon="📚", layout="wide")
-st.markdown("""<style>
-html, body, [class*="css"] { font-size: 19px; }
-.stTabs [data-baseweb="tab"] { font-size: 1.15rem; font-weight: 600; }
-.badge { padding: 2px 10px; border-radius: 10px; color: white; font-weight: 600; }
-</style>""", unsafe_allow_html=True)
+st.set_page_config(page_title="Normativa · Panel", page_icon=":material/balance:", layout="wide")
 
-COLOR_ESTADO = {"vigente": "#1b8a3a", "reemplazada": "#b26a00", "derogada": "#b00020",
-                "por_entrar_en_vigencia": "#1f5fbf"}
-CONF = {"alta": ("🟢 Confianza alta", "success"), "media": ("🟡 Confianza media", "warning"),
-        "sin_respaldo": ("🔴 Sin respaldo normativo", "error")}
+# Sistema visual compartido con /chat y /login (tokens idénticos). Solo CSS propio: nunca datos del servidor.
+_CSS = """<style>
+:root{
+  --bg:#F6F7F9; --surface:#FFFFFF; --surface-2:#F3F5F7; --line:#E3E7EB; --line-2:#ECEFF2;
+  --text:#0F1A1F; --muted:#5B6770; --faint:#8A949C;
+  --acc:#0F4C5C; --acc-hover:#0B3B48; --acc-soft:#E8F0F2;
+  --ok:#1E7A4F; --ok-bg:#E8F4EE; --warn:#9A6200; --warn-bg:#FBF1DE; --bad:#B3362F; --bad-bg:#FBEAE8;
+  --r-sm:8px; --r:12px; --shadow:0 1px 2px rgba(16,24,40,.04);
+  --sans:"Geist","Segoe UI",system-ui,-apple-system,sans-serif; --mono:"Geist Mono","Cascadia Mono",Consolas,monospace;
+}
+/* chrome de Streamlit fuera */
+[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"], [data-testid="stAppDeployButton"],
+#MainMenu, footer, [data-testid="stStatusWidget"] { display:none !important; }
+.stApp { background:var(--bg); }
+.stMainBlockContainer, .block-container { max-width:1320px; padding:28px 40px 72px !important; }
+html, body, .stApp { font-family:var(--sans); -webkit-font-smoothing:antialiased; }
+h1, h2, h3, h4 { letter-spacing:-0.02em !important; color:var(--text); }
+h3 { font-size:1.45rem !important; font-weight:650 !important; padding:0 0 2px !important; }
+h4 { font-size:1.08rem !important; font-weight:600 !important; padding:18px 0 4px !important; }
+[data-testid="stCaptionContainer"] { color:var(--muted); }
+code { font-family:var(--mono) !important; font-size:.88em !important; padding:1px 6px !important; border-radius:6px; }
+
+/* cabecera de producto */
+.nx-top { display:flex; align-items:center; gap:12px; padding:2px 0 22px; }
+.nx-mark { width:30px; height:30px; border-radius:8px; background:var(--acc); display:grid; place-items:center; flex:none; }
+.nx-name { font-size:17px; font-weight:650; letter-spacing:-0.02em; color:var(--text); }
+.nx-name span { color:var(--faint); font-weight:500; }
+.nx-sep { flex:1; }
+.nx-env { font:500 12.5px/1 var(--mono); color:var(--muted); background:var(--surface); border:1px solid var(--line);
+  border-radius:999px; padding:7px 12px; display:inline-flex; align-items:center; gap:8px; }
+.nx-env i { width:7px; height:7px; border-radius:50%; background:var(--ok); display:inline-block; }
+
+/* pestañas: control segmentado (react-aria en Streamlit 1.66) */
+.stTabs > div { border:none !important; box-shadow:none !important; }
+.stTabs [role="tablist"]::before, .stTabs [role="tablist"]::after { display:none !important; }
+.stTabs [role="tablist"] { gap:2px; background:#E9ECF0; padding:4px; border-radius:10px; width:fit-content;
+  max-width:100%; overflow-x:auto; border:none !important; box-shadow:none !important; }
+.stTabs [data-testid="stTab"] { height:auto; padding:7px 16px; border-radius:8px; background:transparent; margin:0 !important;
+  color:var(--muted); transition:background .15s, color .15s, box-shadow .15s; }
+.stTabs [data-testid="stTab"] p { font-size:15px; font-weight:550; color:inherit; }
+.stTabs [data-testid="stTab"]:hover { color:var(--text); }
+.stTabs [data-testid="stTab"][aria-selected="true"] { background:var(--surface); color:var(--text);
+  box-shadow:0 1px 2px rgba(16,24,40,.08), 0 0 0 1px rgba(16,24,40,.04); }
+.stTabs .react-aria-SelectionIndicator { display:none !important; }
+.stTabs [data-testid="stTabPanel"] { padding-top:26px; }
+.stTabs .stTabs [role="tablist"] { background:transparent; padding:0; gap:4px; }
+.stTabs .stTabs [data-testid="stTab"] { padding:6px 12px; }
+.stTabs .stTabs [data-testid="stTab"] p { font-size:14px; }
+.stTabs .stTabs [data-testid="stTab"][aria-selected="true"] { background:var(--acc-soft); color:var(--acc); box-shadow:none; }
+.stTabs .stTabs [data-testid="stTabPanel"] { padding-top:20px; }
+/* chips de multiselect: suaves, no bloque sólido */
+[data-testid="stMultiSelect"] [data-tag] { background:var(--acc-soft) !important; color:var(--acc) !important; border-radius:999px !important; }
+[data-testid="stMultiSelect"] [data-tag] span, [data-testid="stMultiSelect"] [data-tag] button { color:var(--acc) !important; }
+
+/* superficies */
+[data-testid="stVerticalBlockBorderWrapper"]:has(> div > [data-testid="stVerticalBlock"]),
+div[data-testid="stVerticalBlock"][class*="border"] { background:var(--surface); border-color:var(--line) !important;
+  border-radius:var(--r) !important; box-shadow:var(--shadow); }
+[data-testid="stExpander"] details { background:var(--surface); border:1px solid var(--line); border-radius:var(--r-sm); box-shadow:none; }
+[data-testid="stExpander"] summary { padding:12px 16px; }
+[data-testid="stExpander"] summary:hover { color:var(--acc); }
+[data-testid="stDataFrame"] { background:var(--surface); border-radius:var(--r-sm); }
+[data-testid="stForm"] { background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:24px; }
+[data-testid="stAlert"] > div { border-radius:var(--r-sm); }
+[data-testid="stFileUploaderDropzone"] { background:var(--surface); border:1px dashed #C9D1D7; border-radius:var(--r); }
+
+/* métricas: tarjetas KPI */
+[data-testid="stMetric"] { padding:2px 2px 4px; }
+[data-testid="stMetricLabel"] p { font-size:12px !important; font-weight:600; text-transform:uppercase; letter-spacing:.06em;
+  color:var(--muted); }
+[data-testid="stMetricValue"] { font-size:2.1rem !important; font-weight:600; letter-spacing:-0.03em;
+  font-variant-numeric:tabular-nums; color:var(--text); }
+
+/* botones */
+.stButton button, .stFormSubmitButton button, .stDownloadButton button { font-weight:550; transition:all .15s;
+  box-shadow:var(--shadow); }
+[data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primaryFormSubmit"] { background:var(--acc); border-color:var(--acc); }
+[data-testid="stBaseButton-primary"]:hover, [data-testid="stBaseButton-primaryFormSubmit"]:hover { background:var(--acc-hover); border-color:var(--acc-hover); }
+[data-testid="stBaseButton-secondary"]:hover { border-color:var(--acc); color:var(--acc); }
+
+/* pills (st.badge y :color-badge[]) */
+[data-testid="stMarkdownContainer"] span[class*="badge"], .stBadge span { border-radius:999px !important; }
+.stMarkdown blockquote { border-left:2px solid var(--line); color:var(--text); padding-left:14px; margin:6px 0; }
+@media (prefers-reduced-motion: reduce){ *{ transition:none !important; animation:none !important; } }
+</style>"""
+st.markdown(_CSS, unsafe_allow_html=True)
+
+CONF = {"alta": ("Confianza alta", "green"), "media": ("Confianza media", "orange"),
+        "sin_respaldo": ("Sin respaldo normativo", "red")}
 
 
 def api(method: str, path: str, **kw):
@@ -81,19 +161,23 @@ def areas_de(x) -> list[str]:
     return [str(a).strip() for a in x if a is not None and str(a).strip()]
 
 
-def badge(estado: str | None) -> str:
-    c = COLOR_ESTADO.get(estado or "", "#666")
-    return f"<span class='badge' style='background:{c}'>{estado or '?'}</span>"
+def pill(texto, color: str = "gray") -> None:
+    """Pill de estado (mismo estilo en todo el panel)."""
+    try:
+        st.badge(str(texto), color=color)
+    except Exception:
+        st.caption(str(texto))
 
 
 def mostrar_respuesta(r: dict) -> None:
     st.markdown(r.get("respuesta", ""))
-    txt, kind = CONF.get(r.get("confianza"), (str(r.get("confianza")), "info"))
-    getattr(st, kind)(f"{txt} · score {r.get('top_score')} · {r.get('latencia_ms')} ms · run {r.get('run_id')}")
+    txt, color = CONF.get(r.get("confianza"), (str(r.get("confianza")), "gray"))
+    pill(txt, color)
+    st.caption(f"score {r.get('top_score')} · {r.get('latencia_ms')} ms · run {r.get('run_id')}")
     for a in r.get("advertencias") or []:
-        st.warning(f"⚠️ {a}")
+        st.warning(a)
     for c in r.get("citas") or []:
-        with st.expander(f"📄 {c.get('nombre_norma')} · Art. {c.get('articulo')} · v{c.get('version')} · "
+        with st.expander(f"{c.get('nombre_norma')} · Art. {c.get('articulo')} · v{c.get('version')} · "
                          f"{c.get('estado')}"):
             if c.get("cita_literal"):
                 st.markdown(f"> {c['cita_literal']}")
@@ -101,13 +185,32 @@ def mostrar_respuesta(r: dict) -> None:
             st.caption(f"chunk: {c.get('chunk_id', '')}")
 
 
-st.title("📚 Normativa Bancaria · Agentes de IA")
-st.caption(f"API: {API}")
+def _cabecera() -> None:
+    """Barra de producto: nombre a la izquierda, entorno (host de la API) discreto a la derecha."""
+    import html as _html
+    from urllib.parse import urlparse
+    host = _html.escape(urlparse(API).netloc or API)
+    st.markdown(
+        "<div class='nx-top'><div class='nx-mark'><svg width='16' height='16' viewBox='0 0 24 24' fill='none' "
+        "stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3v18M5 7h14"
+        "M7 7l-3 7a3 3 0 0 0 6 0zM17 7l-3 7a3 3 0 0 0 6 0z'/></svg></div>"
+        "<div class='nx-name'>Normativa · Agentes de IA <span>&nbsp;/&nbsp; Panel de administración</span></div>"
+        f"<div class='nx-sep'></div><div class='nx-env' title='API'><i></i>{host}</div></div>",
+        unsafe_allow_html=True)
 
-tabs = st.tabs(["💬 Consultar", "🧾 Agente 1 · Normas", "🔎 Trazas", "📊 Dashboard", "🎯 KPIs", "👥 Usuarios"])
+
+def seccion(titulo: str, sub: str | None = None) -> None:
+    st.markdown(f"### {titulo}")
+    if sub:
+        st.caption(sub)
+
+
+_cabecera()
+tabs = st.tabs(["Consultar", "Normas", "Trazas", "Dashboard", "KPIs", "Usuarios"])
 
 # ------------------------------------------------------------------ Consultar
 with tabs[0]:
+    seccion("Consultar", "Consulta directa al agente de normativa vigente, con citas verificables.")
     if "chat" not in st.session_state:
         st.session_state.chat = []
     for m in st.session_state.chat:
@@ -137,12 +240,28 @@ ETAPAS = [("extrayendo_metadatos", "Extrayendo metadatos"), ("indexando", "Index
           ("comparando", "Comparando"), ("informe", "Informe")]
 ETAPA_IDX = {"recibido": 0, "extrayendo_metadatos": 1, "indexando": 2, "comparando": 3, "informe": 4, "listo": 5}
 FINALES = {"listo", "requiere_revision", "error"}
-CHIP = {"vigente": ("🟢", "green"), "reemplazada": ("⚪", "gray"), "pendiente_revision": ("🟠", "orange"),
-        "rechazada": ("🔴", "red"), "derogada": ("🔴", "red"), "por_entrar_en_vigencia": ("🔵", "blue")}
-CHIP_BG = {"vigente": "#1b8a3a", "reemplazada": "#6b6b6b", "pendiente_revision": "#c77700",
-           "rechazada": "#b00020", "derogada": "#7a0016", "por_entrar_en_vigencia": "#1f5fbf"}
-SEV = {"alta": ("🔴 ALTA", "error"), "media": ("🟠 MEDIA", "warning"), "informativa": ("🔵 INFORMATIVA", "info")}
+CHIP = {"vigente": ("", "green"), "reemplazada": ("", "gray"), "pendiente_revision": ("", "orange"),
+        "rechazada": ("", "red"), "derogada": ("", "red"), "por_entrar_en_vigencia": ("", "blue")}
+# Mismos colores que las pills (texto semántico sobre fondo suave)
+CHIP_BG = {"vigente": ("#E8F4EE", "#1E7A4F"), "reemplazada": ("#EEF1F4", "#5B6770"),
+           "pendiente_revision": ("#FBF1DE", "#9A6200"), "rechazada": ("#FBEAE8", "#B3362F"),
+           "derogada": ("#FBEAE8", "#B3362F"), "por_entrar_en_vigencia": ("#E8F0F2", "#0F4C5C")}
+SEV = {"alta": ("ALTA", "red"), "media": ("MEDIA", "orange"), "informativa": ("INFORMATIVA", "blue")}
 _MD_ESPECIALES = "\\`*_{}[]<>()#+-.!|~$"
+
+
+def plano(x) -> str:
+    """Quita el énfasis markdown (**x**, __x__) de las citas literales."""
+    return ("" if x is None else str(x)).replace("**", "").replace("__", "")
+
+
+def hay_valores(serie) -> bool:
+    """True si hay algún valor numérico distinto de 0 (si todo es 0 se muestra «sin datos», no un gráfico vacío)."""
+    try:
+        v = pd.to_numeric(pd.Series(pd.DataFrame(serie).to_numpy().ravel()), errors="coerce").fillna(0)
+        return bool((v != 0).any())
+    except Exception:
+        return False
 
 
 def md(x) -> str:
@@ -165,52 +284,48 @@ def _js(x):
 
 
 def chip_txt(estado) -> str:
-    e = estado or "?"
-    return f"{CHIP.get(e, ('⚫', 'gray'))[0]} {e}"
+    return str(estado or "?")
 
 
 def chip(estado) -> None:
     e = str(estado or "?")
-    try:
-        st.badge(e, icon=None, color=CHIP.get(e, ("", "gray"))[1])
-    except Exception:
-        st.write(chip_txt(e))
+    pill(e, CHIP.get(e, ("", "gray"))[1])
 
 
 def _pasos_txt(etapa: str | None) -> str:
-    """'✅ Extrayendo metadatos → ⏳ **Indexando** → ○ Comparando → ○ Informe'."""
+    """':green[✓ Extrayendo metadatos]  ›  **Indexando**  ›  :gray[Comparando]  ›  :gray[Informe]'."""
     i = ETAPA_IDX.get(etapa or "", 0)
     partes = []
     for n, (_, lbl) in enumerate(ETAPAS, start=1):
         if n < i or etapa == "listo":
-            partes.append(f"✅ {lbl}")
+            partes.append(f":green[✓ {lbl}]")
         elif n == i:
-            partes.append(f"⏳ **{lbl}**")
+            partes.append(f"**{lbl}…**")
         else:
-            partes.append(f"○ {lbl}")
-    return "  →  ".join(partes)
+            partes.append(f":gray[{lbl}]")
+    return "  ›  ".join(partes)
 
 
 def _subir_y_seguir(nombre: str, contenido: bytes, timeout_s: float = 180, intervalo: float = 1.5) -> dict:
     """POST del archivo y sondeo de /progreso con estado visual. Devuelve un resumen; nunca lanza."""
     res = {"archivo": nombre, "doc_id": None, "resultado": "error", "mensaje": ""}
-    with st.status(f"📄 {nombre}: enviando…", expanded=True) as stt:
+    with st.status(f"{nombre} · enviando…", expanded=True) as stt:
         r, err = api("POST", "/documentos", files={"archivo": (nombre, contenido)}, timeout=180)
         if err:
             res["mensaje"] = err
-            stt.update(label=f"❌ {nombre}: rechazado", state="error")
+            stt.update(label=f"{nombre} · rechazado", state="error")
             st.error(f"No se aceptó el archivo: {err}")
             return res
         r = r if isinstance(r, dict) else {}
         res["doc_id"] = r.get("doc_id")
         if r.get("duplicado"):
             res.update(resultado="duplicado", mensaje=r.get("mensaje") or "")
-            stt.update(label=f"♻️ {nombre}: ya cargado, no se reindexó", state="complete", expanded=False)
+            stt.update(label=f"{nombre} · ya cargado, no se reindexó", state="complete", expanded=False)
             st.info(f"Ya cargado ({r.get('codigo') or r.get('doc_id')}), no se reindexó.")
             return res
         if not res["doc_id"]:
             res["mensaje"] = "El servidor no devolvió doc_id"
-            stt.update(label=f"⚠️ {nombre}: respuesta inesperada", state="error")
+            stt.update(label=f"{nombre} · respuesta inesperada", state="error")
             return res
         barra = st.progress(0.0, text="recibido")
         pasos = st.empty()
@@ -222,7 +337,7 @@ def _subir_y_seguir(nombre: str, contenido: bytes, timeout_s: float = 180, inter
                 if fallos >= 3:
                     st.warning(f"Progreso no disponible ({e2}). El documento sigue procesándose en el servidor.")
                     res.update(resultado="sin_progreso", mensaje=e2)
-                    stt.update(label=f"⚠️ {nombre}: enviado, sin seguimiento", state="complete")
+                    stt.update(label=f"{nombre} · enviado, sin seguimiento", state="complete")
                     return res
                 p = {}
             else:
@@ -232,7 +347,7 @@ def _subir_y_seguir(nombre: str, contenido: bytes, timeout_s: float = 180, inter
                 barra.progress(min(ETAPA_IDX.get(etapa, 4), 5) / 5,
                                text=f"{etapa} · {str(p.get('mensaje') or '')[:120]}")
                 pasos.markdown(_pasos_txt(etapa))
-                stt.update(label=f"📄 {nombre}: {etapa}")
+                stt.update(label=f"{nombre} · {etapa}")
                 if etapa in FINALES:
                     break
             time.sleep(intervalo)
@@ -242,28 +357,28 @@ def _subir_y_seguir(nombre: str, contenido: bytes, timeout_s: float = 180, inter
             res["resultado"] = "listo"
             altas = p.get("n_discrepancias_altas") or 0
             if p.get("estado") == "pendiente_revision":
-                stt.update(label=f"🟠 {nombre}: indexado · requiere revisión ({altas} ALTAS)", state="complete")
+                stt.update(label=f"{nombre} · indexado, requiere revisión ({altas} ALTAS)", state="complete")
                 st.warning(f"Requiere revisión: {altas} discrepancias ALTAS — no se publica para el Agente 2 "
                            "hasta decisión humana.")
             elif altas:  # la norma nueva prevalece (p. ej. externa) y queda publicada; las ALTAS señalan a otras
-                stt.update(label=f"✅ {nombre}: publicada · {altas} discrepancias ALTAS abiertas en otras normas",
+                stt.update(label=f"{nombre} · publicada, {altas} discrepancias ALTAS abiertas en otras normas",
                            state="complete")
                 st.info(f"Publicada: esta norma prevalece. Quedan {altas} discrepancias ALTAS abiertas sobre normas "
                         "internas que deben adecuarse (ver Informe de discrepancias).")
             else:
-                stt.update(label=f"✅ {nombre}: listo · estado {p.get('estado') or '?'}", state="complete",
+                stt.update(label=f"{nombre} · listo, estado {p.get('estado') or '?'}", state="complete",
                            expanded=False)
         elif etapa == "requiere_revision":
             res["resultado"] = "requiere_revision"
-            stt.update(label=f"🟠 {nombre}: no se indexó (requiere revisión)", state="error")
+            stt.update(label=f"{nombre} · no se indexó (requiere revisión)", state="error")
             st.warning("No se indexó: el contenido no parece una norma válida (texto ilegible o sin artículos). "
                        f"{res['mensaje']}")
         elif etapa == "error":
-            stt.update(label=f"❌ {nombre}: error en la ingesta", state="error")
+            stt.update(label=f"{nombre} · error en la ingesta", state="error")
             st.error(f"Error en la ingesta: {res['mensaje']}")
         else:
             res["resultado"] = "timeout"
-            stt.update(label=f"⏱️ {nombre}: sigue en proceso (más de {int(timeout_s)} s)", state="complete")
+            stt.update(label=f"{nombre} · sigue en proceso (más de {int(timeout_s)} s)", state="complete")
             st.info("La ingesta continúa en el servidor; actualiza la lista en unos momentos.")
     return res
 
@@ -288,17 +403,20 @@ def render_discrepancias(lista: list, kp: str, filtros: bool = True) -> None:
     st.caption(f"{len(lista)} discrepancia(s) · {n_alta} ALTA(s)")
     for d in lista:
         did = d.get("id")
-        sev_lbl, kind = SEV.get(d.get("severidad"), (f"⚪ {str(d.get('severidad') or '?').upper()}", "info"))
+        sev_lbl, color = SEV.get(d.get("severidad"), (str(d.get("severidad") or "?").upper(), "gray"))
         with st.container(border=True):
-            getattr(st, kind)(f"**{sev_lbl}** · Tema: **{md(d.get('tema') or '—')}** · {md(d.get('tipo') or '')}"
-                              f" · #{md(did)} · revisión: {md(d.get('estado_revision') or d.get('estado') or '—')}")
-            a, b = st.columns(2)
+            st.markdown(f":{color}-badge[{sev_lbl}] &nbsp; **{md(d.get('tema') or '—')}**")
+            st.caption(f"{md(d.get('tipo') or '—')} · #{md(did)} · revisión: "
+                       f"{md(d.get('estado_revision') or d.get('estado') or '—')}")
+            a, b = st.columns(2, gap="large")
             for col, lado, letra in ((a, "a", "A"), (b, "b", "B")):
                 with col:
-                    st.markdown(f"#### Documento {letra}: {md(d.get('doc_' + lado) or '—')}")
-                    st.markdown(f"**{md(d.get('nombre_' + lado) or '')}**  \n"
-                                f"Art. {md(d.get('art_' + lado) or '—')} · versión {md(d.get('version_' + lado) or '—')}")
-                    cita = d.get("cita_" + lado)
+                    codigo = str(d.get("doc_" + lado) or "—").replace("`", "")
+                    st.caption(f"DOCUMENTO {letra}")
+                    st.markdown(f"`{codigo}` &nbsp;**{md(d.get('nombre_' + lado) or '')}**  \n"
+                                f":gray[Art. {md(d.get('art_' + lado) or '—')} · versión "
+                                f"{md(d.get('version_' + lado) or '—')}]")
+                    cita = plano(d.get("cita_" + lado))
                     if cita:
                         st.markdown("> " + md(cita).replace("\n", "\n> "))
                     else:
@@ -310,8 +428,9 @@ def render_discrepancias(lista: list, kp: str, filtros: bool = True) -> None:
             if did is not None and (d.get("estado_revision") in (None, "", "pendiente")):
                 com = st.text_input("Comentario (opcional)", key=f"{kp}_com_{did}")
                 c1, c2, _ = st.columns([1, 1, 3])
-                for col, dec, lbl in ((c1, "confirmada", "✅ Confirmar"), (c2, "descartada", "❌ Descartar")):
-                    if col.button(lbl, key=f"{kp}_{dec}_{did}"):
+                for col, dec, lbl in ((c1, "confirmada", "Confirmar"), (c2, "descartada", "Descartar")):
+                    if col.button(lbl, key=f"{kp}_{dec}_{did}", width="stretch",
+                                  type="primary" if dec == "confirmada" else "secondary"):
                         _, e2 = api("POST", f"/discrepancias/{did}/revisar",
                                     json={"decision": dec, "comentario": com})
                         if e2:
@@ -334,15 +453,16 @@ def _decidir(doc_id, decision: str, comentario: str) -> None:
 
 def banner_revision(doc: dict, n_altas: int, kp: str) -> None:
     with st.container(border=True):
-        st.error(f"### ⚠️ Requiere revisión: {n_altas} discrepancias ALTAS — no se publica para el Agente 2\n\n"
-                 f"{md(doc.get('codigo') or doc.get('doc_id'))} · {md(doc.get('nombre_norma') or '')}")
+        st.markdown(f":orange-badge[Requiere revisión] &nbsp; **{n_altas} discrepancias ALTAS** · "
+                    "no se publica para el Agente 2 hasta decisión humana")
+        st.caption(f"{md(doc.get('codigo') or doc.get('doc_id'))} · {md(doc.get('nombre_norma') or '')}")
         com = st.text_input("Comentario del revisor (opcional)", key=f"{kp}_dcom")
         c1, c2, c3 = st.columns(3)
-        if c1.button("✅ Aprobar y publicar", key=f"{kp}_aprobar", type="primary", width="stretch"):
+        if c1.button("Aprobar y publicar", key=f"{kp}_aprobar", type="primary", width="stretch"):
             _decidir(doc.get("doc_id"), "aprobar_publicar", com)
-        if c2.button("⛔ Rechazar", key=f"{kp}_rechazar", width="stretch"):
+        if c2.button("Rechazar", key=f"{kp}_rechazar", width="stretch"):
             _decidir(doc.get("doc_id"), "rechazar", com)
-        if c3.button("📤 Publicar de todas formas", key=f"{kp}_igual", width="stretch"):
+        if c3.button("Publicar de todas formas", key=f"{kp}_igual", width="stretch"):
             _decidir(doc.get("doc_id"), "publicar_igual", com)
 
 
@@ -351,7 +471,7 @@ def editor_areas(doc: dict, sel: str) -> None:
     actuales = areas_de(doc.get("areas_aplica"))
     lista = areas_lista()
     with st.container(border=True):
-        st.markdown("**🏢 Áreas de aplicación**")
+        st.markdown("**Áreas de aplicación**")
         fuente, confz = doc.get("areas_fuente"), doc.get("areas_confianza")
         try:
             conf_txt = f"{float(confz):.2f}" if confz is not None else "—"
@@ -360,7 +480,7 @@ def editor_areas(doc: dict, sel: str) -> None:
         st.caption(f"Actuales: {md(', '.join(actuales) or '—')} · fuente: {md(fuente or '—')} · "
                    f"confianza: {conf_txt}")
         if doc.get("areas_requiere_confirmacion") in (1, True, "1"):
-            st.warning("⚠ Áreas inferidas por IA: confirma o corrige y guarda.")
+            st.markdown(":orange-badge[Inferidas por IA] &nbsp; Confirma o corrige y guarda.")
         opciones = list(lista) + [a for a in actuales if a not in lista]
         nuevas = st.multiselect("Áreas a las que aplica la norma", opciones, default=actuales,
                                 key=f"a1_areas_{sel}", placeholder="ninguna")
@@ -377,7 +497,7 @@ def editor_areas(doc: dict, sel: str) -> None:
 
 
 with tabs[1]:
-    st.subheader("🧾 Agente 1 · Ingesta y validación de normas")
+    seccion("Normas", "Agente 1 · ingesta, validación contra el corpus y control humano antes de publicar.")
     if st.session_state.get("a1_flash"):
         st.success(st.session_state.pop("a1_flash"))
 
@@ -391,18 +511,19 @@ with tabs[1]:
     pend = [d for d in docs if d.get("estado") == "pendiente_revision"]
     if pend:
         with st.container(border=True):
-            st.markdown(f"#### 🟠 Pendientes de revisión ({len(pend)})")
+            st.markdown(f"**Pendientes de revisión** &nbsp; :orange-badge[{len(pend)}]")
             for d in pend:
-                c1, c2 = st.columns([5, 1])
-                c1.markdown(f"**{md(d.get('codigo') or d.get('doc_id'))}** · {md(d.get('nombre_norma') or '')} · "
-                            f"v{md(d.get('version') or '?')} · {md(d.get('entidad') or '')}")
-                if c2.button("Revisar", key=f"a1_rev_{d.get('doc_id')}"):
+                c1, c2 = st.columns([6, 1], vertical_alignment="center")
+                codigo = str(d.get("codigo") or d.get("doc_id") or "").replace("`", "")
+                c1.markdown(f"`{codigo}` &nbsp; {md(d.get('nombre_norma') or '')}  \n"
+                            f":gray[v{md(d.get('version') or '?')} · {md(d.get('entidad') or '—')}]")
+                if c2.button("Revisar", key=f"a1_rev_{d.get('doc_id')}", width="stretch"):
                     st.session_state["a1_doc_sel"] = str(d.get("doc_id"))
                     st.rerun()
     elif not err_docs:
-        st.caption("✅ No hay documentos pendientes de revisión.")
+        st.caption("No hay documentos pendientes de revisión.")
 
-    sub = st.tabs(["📥 Cargar normas", "📑 Normas y detalle", "⚖️ Informe de discrepancias"])
+    sub = st.tabs(["Cargar normas", "Normas y detalle", "Informe de discrepancias"])
 
     # ---- Cargar
     with sub[0]:
@@ -423,13 +544,13 @@ with tabs[1]:
         if not docs:
             st.info("Aún no hay normas registradas." if not err_docs else "Lista no disponible.")
         else:
-            c1, c1b, c2 = st.columns([3, 3, 1])
+            c1, c1b, c2 = st.columns([3, 3, 1], vertical_alignment="bottom")
             estados = sorted({str(d.get("estado")) for d in docs if d.get("estado")})
             fest = c1.multiselect("Filtrar por estado", estados, key="a1_fest", placeholder="todos")
             areas_docs = {a for d in docs for a in areas_de(d.get("areas_aplica"))}
             opc_areas = list(areas_lista()) + sorted(areas_docs - set(areas_lista()))
             farea = c1b.multiselect("Filtrar por área", opc_areas, key="a1_farea", placeholder="todas")
-            if c2.button("🔄 Actualizar", key="a1_ref"):
+            if c2.button("Actualizar", key="a1_ref", width="stretch"):
                 st.rerun()
             vis = [d for d in docs if (not fest or str(d.get("estado")) in fest)
                    and (not farea or set(areas_de(d.get("areas_aplica"))) & set(farea))]
@@ -444,18 +565,22 @@ with tabs[1]:
                               "chip": chip_txt(d.get("estado")), "norma": d.get("nombre_norma"),
                               "tipo": d.get("tipo_fuente"), "versión": d.get("version"),
                               "áreas": (", ".join(areas_de(d.get("areas_aplica"))) or "—") +
-                                       (" ⚠ inferidas por IA, confirmar"
+                                       (" · por confirmar (IA)"
                                         if d.get("areas_requiere_confirmacion") in (1, True, "1") else ""),
-                              "reemplaza a": d.get("reemplaza_a"), "reemplazada por": d.get("reemplazada_por"),
-                              "publicado": "✅ sí" if d.get("publicado") in (1, True, "1") else "— no",
-                              "notas": ", ".join(notas), "vigencia": d.get("fecha_vigencia"),
+                              "reemplaza a": d.get("reemplaza_a") or "—",
+                              "reemplazada por": d.get("reemplazada_por") or "—",
+                              "publicado": "sí" if d.get("publicado") in (1, True, "1") else "no",
+                              "notas": ", ".join(notas), "vigencia": d.get("fecha_vigencia") or "—",
                               "chunks": d.get("n_chunks"), "ingesta": d.get("estado_ingesta")})
             df = pd.DataFrame(filas)
             if not df.empty:
                 def _bg(v):
-                    return f"background-color: {CHIP_BG[v]}; color: white; font-weight: 600" if v in CHIP_BG else ""
+                    if v not in CHIP_BG:
+                        return ""
+                    fondo, tinta = CHIP_BG[v]
+                    return f"background-color: {fondo}; color: {tinta}; font-weight: 600"
                 st.dataframe(df.style.map(_bg, subset=["estado"]), width="stretch", hide_index=True,
-                             column_config={"chip": None})
+                             column_config={"chip": None}, row_height=40)
             ids = [str(d.get("doc_id")) for d in vis if d.get("doc_id") is not None]
             sel_prev = st.session_state.get("a1_doc_sel")
             if sel_prev and sel_prev not in ids and sel_prev in por_id:
@@ -478,23 +603,27 @@ with tabs[1]:
                 discs = ds if isinstance(ds, list) else (det.get("discrepancias") or [])
                 n_altas = sum(1 for x in discs if isinstance(x, dict) and x.get("severidad") == "alta")
 
-                st.markdown(f"### {md(doc.get('codigo') or sel)} · {md(doc.get('nombre_norma') or '')}")
-                h = st.columns(6)
-                with h[0]:
-                    chip(doc.get("estado"))
-                h[1].markdown(f"**Tipo:** {md(doc.get('tipo_fuente') or '—')}")
-                h[2].markdown(f"**Versión:** {md(doc.get('version') or '—')}")
-                h[3].markdown(f"**Publicado:** {'✅ sí' if doc.get('publicado') in (1, True, '1') else '— no'}")
-                h[4].markdown(f"**Reemplaza a:** {md(doc.get('reemplaza_a') or '—')}")
-                h[5].markdown(f"**Reemplazada por:** {md(doc.get('reemplazada_por') or '—')}")
+                with st.container(border=True):
+                    st.caption(str(doc.get("codigo") or sel))
+                    st.markdown(f"### {md(doc.get('nombre_norma') or doc.get('codigo') or sel)}")
+                    h = st.columns(6)
+                    with h[0]:
+                        st.markdown(":gray[ESTADO]")
+                        chip(doc.get("estado"))
+                    for col, lbl, val in ((h[1], "TIPO", doc.get("tipo_fuente")), (h[2], "VERSIÓN", doc.get("version")),
+                                          (h[3], "PUBLICADO",
+                                           "sí" if doc.get("publicado") in (1, True, "1") else "no"),
+                                          (h[4], "REEMPLAZA A", doc.get("reemplaza_a")),
+                                          (h[5], "REEMPLAZADA POR", doc.get("reemplazada_por"))):
+                        col.markdown(f":gray[{lbl}]  \n{md(val or '—')}")
                 if doc.get("estado_inferido") or doc.get("requiere_confirmacion"):
-                    st.info("ℹ️ Estado inferido automáticamente" +
+                    st.info("Estado inferido automáticamente" +
                             (" · requiere confirmación humana" if doc.get("requiere_confirmacion") else ""))
                 if doc.get("estado") == "pendiente_revision":
                     banner_revision(doc, n_altas, kp=f"a1d_{sel}")
                 editor_areas(doc, sel)
 
-                dt = st.tabs(["🗂️ Metadatos", "📌 Afirmaciones", "⚖️ Discrepancias", "🔎 Traza"])
+                dt = st.tabs(["Metadatos", "Afirmaciones", "Discrepancias", "Traza"])
                 with dt[0]:
                     meta = _js(doc.get("metadatos_json")) or {k: doc.get(k) for k in
                            ["codigo", "nombre_norma", "entidad", "tipo_fuente", "fecha_emision", "fecha_vigencia",
@@ -547,9 +676,10 @@ with tabs[1]:
 
 # ------------------------------------------------------------------ Trazas
 with tabs[2]:
-    st.subheader("Trazas de ejecución por agente")
-    ICON = {"input": "📥", "thought": "💭", "tool_call": "🛠️", "tool_result": "📦", "final": "✅",
-            "error": "❌", "verificacion": "🧪", "handoff": "🔀", "guardrail": "🛡️"}
+    seccion("Trazas", "Ejecución paso a paso de cada agente: entradas, herramientas, fragmentos con score y salida.")
+    ICON = {"input": "Entrada", "thought": "Razonamiento", "tool_call": "Herramienta", "tool_result": "Resultado",
+            "final": "Final", "error": "Error", "verificacion": "Verificación", "handoff": "Traspaso",
+            "guardrail": "Control"}
 
     def _detalle_run(run_id: str) -> None:
         """Detalle de una ejecución de agente (tabla trazas): pasos, herramientas y fragmentos con score."""
@@ -563,8 +693,8 @@ with tabs[2]:
                    f"inicio {det.get('started_at') or '-'} · fin {det.get('finished_at') or '-'}")
         for p in det.get("pasos", []):
             data = p.get("data") or {}
-            with st.expander(f"{ICON.get(p.get('type'), '•')} #{p.get('n')} {p.get('agent')} / "
-                             f"{p.get('type')}: {(p.get('summary') or '')[:110]}"):
+            with st.expander(f"**{p.get('n')}** · {ICON.get(p.get('type'), p.get('type'))} · {p.get('agent')} — "
+                             f"{(p.get('summary') or '')[:110]}"):
                 if p.get("type") == "tool_call":
                     st.json(data.get("arguments", {}))
                 elif p.get("type") == "tool_result":
@@ -605,7 +735,7 @@ with tabs[2]:
         if sel:
             _detalle_run(opciones[sel])
 
-    t_a1, t_a2 = st.tabs(["🧾 Agente 1 · Ingesta y validación", "💬 Agente 2 · Chat de consultas y casos"])
+    t_a1, t_a2 = st.tabs(["Agente 1 · Ingesta y validación", "Agente 2 · Chat de consultas y casos"])
 
     with t_a1:
         st.caption("Pipeline de ingesta por documento (recepción, hash, metadatos con confianza, chunks, "
@@ -652,41 +782,42 @@ with tabs[2]:
 
 # ------------------------------------------------------------------ Dashboard
 with tabs[3]:
+    seccion("Dashboard", "Uso del sistema, cobertura normativa y discrepancias activas.")
     dash, err = api("GET", "/dashboard")
     if err:
         st.warning(f"No se pudo cargar el dashboard: {err}")
     else:
         u = dash.get("uso", {})
         m = st.columns(6)
-        m[0].metric("Consultas", u.get("consultas_total", 0))
-        m[1].metric("Hoy", u.get("consultas_hoy", 0))
-        m[2].metric("% cubiertas", f"{u.get('pct_cubiertas', 0)}%")
-        m[3].metric("Latencia p50", f"{u.get('latencia_p50_ms', 0)} ms")
-        m[4].metric("Documentos", u.get("documentos", 0))
-        m[5].metric("Fragmentos", u.get("chunks", 0))
+        for col, lbl, val in ((m[0], "Consultas", u.get("consultas_total", 0)), (m[1], "Hoy", u.get("consultas_hoy", 0)),
+                              (m[2], "% cubiertas", f"{u.get('pct_cubiertas', 0)}%"),
+                              (m[3], "Latencia p50", f"{u.get('latencia_p50_ms', 0)} ms"),
+                              (m[4], "Documentos", u.get("documentos", 0)), (m[5], "Fragmentos", u.get("chunks", 0))):
+            col.container(border=True).metric(lbl, val)
         c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Normas más consultadas")
+        with c1.container(border=True):
+            st.markdown("**Normas más consultadas**")
             tn = dash.get("top_normas") or []
-            if tn:
-                st.bar_chart(pd.DataFrame(tn).set_index("nombre_norma")["n"], horizontal=True)
+            if tn and hay_valores(pd.DataFrame(tn).get("n", pd.Series(dtype=float))):
+                st.bar_chart(pd.DataFrame(tn).set_index("nombre_norma")["n"], horizontal=True, color="#0F4C5C")
             else:
-                st.info("Sin datos aún.")
-        with c2:
-            st.subheader("Temas sin cobertura")
+                st.caption("Sin datos aún.")
+        with c2.container(border=True):
+            st.markdown("**Temas sin cobertura**")
             sc = dash.get("sin_cobertura") or []
             if not sc:
-                st.info("Todas las consultas tuvieron respaldo.")
+                st.caption("Todas las consultas tuvieron respaldo.")
             for s in sc:
                 st.markdown(f"**{s['tema']}** · {s['n']} consulta(s)")
                 for ej in s.get("ejemplos", []):
                     st.caption(f"• {ej}")
         disc = dash.get("discrepancias", {})
-        st.subheader(f"Discrepancias activas: {disc.get('total', 0)}")
-        if disc.get("por_tipo"):
-            st.bar_chart(pd.Series(disc["por_tipo"], name="n"))
-        if disc.get("recientes"):
-            st.dataframe(pd.DataFrame(disc["recientes"]), width="stretch", hide_index=True)
+        with st.container(border=True):
+            st.markdown(f"**Discrepancias activas** &nbsp; :gray-badge[{disc.get('total', 0)}]")
+            if disc.get("por_tipo") and hay_valores(pd.Series(disc["por_tipo"])):
+                st.bar_chart(pd.Series(disc["por_tipo"], name="n"), color="#0F4C5C")
+            if disc.get("recientes"):
+                st.dataframe(pd.DataFrame(disc["recientes"]), width="stretch", hide_index=True)
 
 # ------------------------------------------------------------------ KPIs
 SD = "sin datos"
@@ -755,7 +886,7 @@ def _barras_area(rows, nombre: str) -> None:
     if dfa.empty or not dfa["n"].sum():
         st.caption(SD)
         return
-    st.bar_chart(dfa.groupby("area")["n"].sum().rename(nombre))
+    st.bar_chart(dfa.groupby("area")["n"].sum().rename(nombre), color="#0F4C5C")
 
 
 def fetch_kpis(params: dict):
@@ -766,7 +897,7 @@ def fetch_kpis(params: dict):
 with tabs[4]:
     import datetime as _dt
 
-    st.subheader("🎯 KPIs · valor medible de los agentes")
+    seccion("KPIs", "Valor medible de los agentes, calculado desde consultas, trazas y discrepancias registradas.")
     hoy = _dt.date.today()
     f = st.columns([1, 1, 1, 1, 1.3])
     desde = f[0].date_input("Desde", value=hoy, key="k_desde")
@@ -794,7 +925,7 @@ with tabs[4]:
         efi, traz = _g(kp, "eficiencia", default={}), _g(kp, "trazabilidad", default={})
         tend = _g(kp, "tendencia", default={})
         total = _g(cal, "total_consultas", default=0)
-        st.info(f"Backend de búsqueda: **{_g(kp, 'backend', default=SD)}** · umbral usado: "
+        st.caption(f"Backend de búsqueda: **{_g(kp, 'backend', default=SD)}** · umbral usado: "
                 f"**{_g(kp, 'umbral', default='el del backend')}** · consultas en el rango: **{total}** "
                 f"({_desglose(_g(cal, 'por_tipo'))}) · generado: {_g(kp, 'generado_at', default=SD)}")
         if not total:
@@ -842,8 +973,8 @@ with tabs[4]:
                 else:
                     st.caption("ninguna")
 
-        tab1, tab2, tab3 = st.tabs(["🧾 Agente 1 · Ingesta y validación",
-                                    "💬 Agente 2 · Chat de consultas y casos", "📐 Cómo se calcula"])
+        tab1, tab2, tab3 = st.tabs(["Agente 1 · Ingesta y validación",
+                                    "Agente 2 · Chat de consultas y casos", "Cómo se calcula"])
 
         # ================================================================ Agente 1
         with tab1:
@@ -856,8 +987,8 @@ with tabs[4]:
                 st.caption(f"por severidad: {_desglose(_g(disc, 'por_severidad'))}")
                 st.caption(f"por tipo: {_desglose(_g(disc, 'por_tipo'))}")
                 ps = _g(disc, "por_severidad", default={})
-                if isinstance(ps, dict) and ps:
-                    st.bar_chart(pd.Series(ps, name="discrepancias"))
+                if isinstance(ps, dict) and ps and hay_valores(pd.Series(ps)):
+                    st.bar_chart(pd.Series(ps, name="discrepancias"), color="#0F4C5C")
             obs = _g(prev, "normas_obsoletas", default={})
             with b[1].container(border=True):
                 st.metric("6 · Normas obsoletas o reemplazadas", _g(obs, "total", default=0))
@@ -902,8 +1033,8 @@ with tabs[4]:
                 st.caption(f"sobre {_g(cp, 'n', default=0)} consultas")
                 dist = _g(cp, "distribucion", default={})
                 if isinstance(dist, dict) and dist:
-                    st.caption(f"🟢 alta: {dist.get('alta', 0)} · 🟡 media: {dist.get('media', 0)} · "
-                               f"🔴 sin respaldo: {dist.get('sin_respaldo', 0)}")
+                    st.caption(f"alta: {dist.get('alta', 0)} · media: {dist.get('media', 0)} · "
+                               f"sin respaldo: {dist.get('sin_respaldo', 0)}")
                 else:
                     st.caption(f"distribución: {SD}")
 
@@ -912,8 +1043,7 @@ with tabs[4]:
             _tiempos(AGENTE2, c[0])
             ta = _g(efi, "tiempo_ahorrado", default={})
             with c[1].container(border=True):
-                st.markdown("<span class='badge' style='background:#b26a00'>ESTIMADO · supuesto editable</span>",
-                            unsafe_allow_html=True)
+                pill("Estimado · supuesto editable", "orange")
                 st.metric("9 · Tiempo ahorrado (estimado)", _num(_g(ta, "horas"), suf=" h"))
                 st.caption(f"Supuesto: {_g(ta, 'supuesto', default=SD)}")
                 st.caption(f"= {_g(ta, 'consultas', default=0)} consultas × "
@@ -926,17 +1056,17 @@ with tabs[4]:
             with g[0].container(border=True):
                 st.markdown("**11 · Top 10 normas más consultadas**")
                 dft = _df(_g(traz, "top_normas"), ["nombre_norma", "doc_id", "n"])
-                if dft is not None and "n" in dft.columns:
+                if dft is not None and "n" in dft.columns and hay_valores(dft["n"]):
                     dft = dft.head(10)
                     idx = "nombre_norma" if "nombre_norma" in dft.columns else dft.columns[0]
-                    st.bar_chart(dft.set_index(idx)["n"], horizontal=True)
+                    st.bar_chart(dft.set_index(idx)["n"], horizontal=True, color="#0F4C5C")
                 else:
                     st.caption(SD)
             with g[1].container(border=True):
                 st.markdown("**11 · Normas que faltan (brechas por tema)**")
                 dfb = _df(_g(tend, "brechas_por_tema"), ["tema", "n"])
-                if dfb is not None and {"tema", "n"} <= set(dfb.columns):
-                    st.bar_chart(dfb.set_index("tema")["n"])
+                if dfb is not None and {"tema", "n"} <= set(dfb.columns) and hay_valores(dfb["n"]):
+                    st.bar_chart(dfb.set_index("tema")["n"], color="#0F4C5C")
                 br = _g(traz, "brechas", default=[])
                 if isinstance(br, list) and br:
                     with st.expander("Ejemplos por tema"):
@@ -969,9 +1099,10 @@ with tabs[4]:
             st.markdown(f"#### Tendencia de consultas ({_g(tend, 'granularidad', default=gran)})")
             dfc = _df(_g(tend, "consultas"), ["t", "n", "sin_cobertura"])
             ycols = [x for x in ["n", "sin_cobertura"] if dfc is not None and x in dfc.columns]
-            if dfc is not None and "t" in dfc.columns and ycols:
+            if dfc is not None and "t" in dfc.columns and ycols and hay_valores(dfc[ycols]):
                 # barras: con un solo bucket una línea no se dibuja
-                st.bar_chart(dfc.set_index("t")[ycols], stack=False)
+                st.bar_chart(dfc.set_index("t")[ycols], stack=False,
+                             color=["#0F4C5C", "#AEB8BF"][:len(ycols)])
             else:
                 st.caption(SD)
 
@@ -1004,7 +1135,7 @@ with tabs[4]:
 
 # ------------------------------------------------------------------ Usuarios
 with tabs[5]:
-    st.subheader("👥 Usuarios y áreas")
+    seccion("Usuarios", "Cuentas de acceso al chat y su área, usada para filtrar normas aplicables.")
     if st.session_state.get("u_flash"):
         st.success(st.session_state.pop("u_flash"))
     us, e_us = api("GET", "/usuarios")
