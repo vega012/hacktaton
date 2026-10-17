@@ -69,6 +69,16 @@ python scripts/verify_remote.py https://<IP-con-guiones>.sslip.io
 ```
 Comprueba `/health`, lanza el caso de ejemplo, aprueba la acción sensible y muestra la traza.
 
+### Si tu red bloquea sslip.io
+
+Algunas redes (filtros DNS como Fortinet FortiGuard) bloquean `*.sslip.io`: el host resuelve a
+otra IP y aparece un certificado "no confiable" o un 403. El servidor no tiene la culpa.
+Comprobar: `nslookup <IP-con-guiones>.sslip.io` debe devolver la IP del VPS.
+
+- Verificar igual saltando el DNS local (el certificado se valida normal):
+  `python scripts/verify_remote.py https://<host> --ip <IP>`
+- Para la demo en esa red: usar otra red (ej. datos del celular) o el plan B por IP.
+
 ## Seguridad
 
 - `.env` está en `.gitignore` y `.dockerignore`: nunca entra al repo ni a la imagen.

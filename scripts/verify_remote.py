@@ -1,6 +1,9 @@
 """Verifica un despliegue desde FUERA del servidor (solo librería estándar).
 
-Uso: python scripts/verify_remote.py https://203-0-113-5.sslip.io [--rechazar]
+Uso: python scripts/verify_remote.py https://203-0-113-5.sslip.io [--rechazar] [--ip 203.0.113.5]
+
+--ip fuerza la resolución DNS del host a esa IP (útil si la red local filtra sslip.io);
+el certificado HTTPS se sigue validando normalmente contra el hostname.
 
 1) GET /health   2) lanza el caso de ejemplo   3) espera la aprobación pendiente
 4) aprueba (o rechaza)   5) espera el resultado final e imprime la traza
@@ -9,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import sys
 import time
 import urllib.request
@@ -36,7 +40,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("base_url")
     ap.add_argument("--rechazar", action="store_true")
+    ap.add_argument("--ip", help="forzar la IP del host (saltarse el DNS local)")
     a = ap.parse_args()
+    if a.ip:
+        _orig = socket.getaddrinfo
+        socket.getaddrinfo = lambda host, *args, **kw: _orig(a.ip, *args, **kw)
     base = a.base_url.rstrip("/")
 
     print("health:", call(base, "/health"))
