@@ -43,6 +43,14 @@ def health() -> dict:
 INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 
 
+CHAT = Path(__file__).resolve().parent / "static" / "chat.html"
+
+
+@app.get("/chat", include_in_schema=False)
+def chat_page() -> FileResponse:
+    return FileResponse(CHAT)
+
+
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
     return FileResponse(INDEX)

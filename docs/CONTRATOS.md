@@ -28,3 +28,34 @@ Metadatos: `doc_id, nombre_norma, entidad, tipo, tema, articulo, pagina, fecha_e
 | `GET /api/dashboard` | — | `{top_normas:[{doc_id, nombre_norma, n}], sin_cobertura:[{tema, n, ejemplos}], discrepancias:{total, por_tipo, recientes}, uso:{consultas_total, consultas_hoy, pct_cubiertas, latencia_p50_ms, documentos, chunks}}` |
 
 Canales (clientes delgados, sin lógica): bot de Telegram y Streamlit llaman a estos endpoints vía `API_BASE_URL`.
+
+## Frente C — Chat de casos (`app/normas/api_chat.py`, `app/normas/casos.py`, `app/static/chat.html` en `/chat`)
+Interfaz de chat separada (reemplaza a Telegram). El usuario describe o sube (PDF/DOCX/TXT) un caso concreto y el
+agente lo evalúa contra las normas cargadas; también responde consultas simples y preguntas de seguimiento.
+
+| Ruta | Entrada | Salida |
+|---|---|---|
+| `POST /api/chat` | multipart: `session_id`, `mensaje`, `archivo?` | ver abajo |
+| `GET /api/chat/ejemplos` | — | `[{id, titulo, texto}]` casos de ejemplo para la demo |
+| `GET /api/chat/{session_id}` | — | `[{rol: "usuario"|"agente", contenido, tipo, payload, run_id, created_at}]` |
+
+Respuesta de `POST /api/chat`:
+```json
+{
+  "session_id": "s1", "run_id": "r_1", "tipo": "consulta | caso", "latencia_ms": 9000,
+  "respuesta": "texto breve para la burbuja del chat",
+  "confianza": "alta | media | sin_respaldo",
+  "citas": [{"doc_id", "nombre_norma", "articulo", "version", "estado", "texto"}],
+  "advertencias": ["..."],
+  "dictamen": null | {
+    "resumen_caso": "...",
+    "hechos": [{"dato": "Ingreso neto mensual", "valor": "S/ 6,000"}],
+    "evaluaciones": [{"regla", "doc_id", "nombre_norma", "articulo", "version", "estado", "cita",
+                      "resultado": "cumple | no_cumple | indeterminado", "explicacion"}],
+    "calculos": [{"descripcion", "expresion", "resultado"}],
+    "conflictos": ["..."], "vacios": ["aspectos del caso sin norma que los regule"],
+    "conclusion": "procede | procede_con_observaciones | no_procede | requiere_escalamiento",
+    "acciones": ["..."]
+  }
+}
+```
