@@ -10,7 +10,7 @@ from pydantic import BaseModel
 import app.sector  # noqa: F401  registra tools y validadores
 from app.agents.engine import engine
 from app.agents.trace import store
-from app.sector.agents import CASO_EJEMPLO, asistente
+from app.sector.agents import CASO_EJEMPLO, FLOW
 
 router = APIRouter(prefix="/api")
 
@@ -42,7 +42,7 @@ def example() -> dict:
 @router.post("/runs", status_code=202)
 def create_run(req: RunRequest) -> dict:
     text = (req.input or "").strip() or CASO_EJEMPLO
-    run = engine.start(asistente, text, case=req.case, background=True)
+    run = engine.start(FLOW, text, case=req.case, background=True)
     return {"id": run.id, "status": run.status}
 
 

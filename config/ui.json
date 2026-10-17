@@ -32,11 +32,14 @@
   },
   "tool_names": {
     "consultar_entidad": "Consultar entidad",
-    "crear_orden": "Crear orden"
+    "crear_orden": "Crear orden",
+    "transferir_a": "Traspasar a agente"
   },
   "field_names": {
     "entidad_id": "Entidad",
     "monto": "Monto",
-    "descripcion": "Descripción"
+    "descripcion": "Descripción",
+    "agente": "Agente",
+    "instrucciones": "Instrucciones"
   }
 }

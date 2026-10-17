@@ -66,6 +66,7 @@ class Run:
     approvals: list[Approval] = field(default_factory=list)
     output: str | None = None
     error: str | None = None
+    state: dict[str, Any] = field(default_factory=dict)  # estado compartido entre agentes
 
     def add_step(self, agent: str, type_: str, summary: str, **data: Any) -> Step:
         step = Step(n=len(self.steps) + 1, ts=_now(), agent=agent, type=type_, summary=summary, data=data)

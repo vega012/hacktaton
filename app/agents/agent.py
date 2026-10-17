@@ -38,9 +38,36 @@ class Agent:
     reasoning_effort: str | None = None
     max_iterations: int = 8
     temperature: float | None = 0.2
+    handoffs: list[str] = field(default_factory=list)  # agentes a los que puede traspasar el trabajo
 
     def system_prompt(self) -> str:
-        return f"{self.role}\n\n{BASE_INSTRUCTIONS}"
+        prompt = f"{self.role}\n\n{BASE_INSTRUCTIONS}"
+        if self.handoffs:
+            prompt += (f"\nSi el caso requiere trabajo de otro agente ({', '.join(self.handoffs)}), "
+                       f"usa la herramienta {HANDOFF_TOOL} con instrucciones precisas en vez de responder.")
+        return prompt
+
+
+HANDOFF_TOOL = "transferir_a"
+
+
+def handoff_schema(targets: list[str]) -> dict[str, Any]:
+    """Tool interna que permite al agente traspasar el trabajo (handoff condicional)."""
+    return {
+        "type": "function",
+        "function": {
+            "name": HANDOFF_TOOL,
+            "description": "Traspasa el caso a otro agente con instrucciones claras de lo que debe hacer.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "agente": {"type": "string", "enum": targets},
+                    "instrucciones": {"type": "string", "description": "Qué debe hacer el otro agente y con qué datos"},
+                },
+                "required": ["agente", "instrucciones"],
+            },
+        },
+    }
 
 
 def _short(text: str, limit: int = 300) -> str:
@@ -66,6 +93,7 @@ class AgentSession:
         self.iterations = 0
         self.status = "idle"  # idle | running | waiting_approval | done | failed
         self.output: str | None = None
+        self.handoff: tuple[str, str] | None = None  # (agente destino, instrucciones)
 
     # ---- API pública -------------------------------------------------------
     def start(self) -> str:
@@ -102,6 +130,11 @@ class AgentSession:
                         self.status = "waiting_approval"
                         return self.status
                     self.pending_calls.pop(0)
+                    if self.handoff:  # traspaso: este agente termina aquí
+                        self.pending_calls.clear()
+                        self.output = self.handoff[1]
+                        self.status = "done"
+                        return self.status
 
                 # 2) Pedir al modelo el siguiente paso
                 if self.iterations >= self.agent.max_iterations:
@@ -109,7 +142,7 @@ class AgentSession:
                 self.iterations += 1
                 resp = self.llm.chat(
                     self.messages,
-                    tools=registry.schemas(self.agent.tools) or None,
+                    tools=self._tool_schemas(),
                     thinking=self.agent.thinking,
                     reasoning_effort=self.agent.reasoning_effort,
                     temperature=self.agent.temperature,
@@ -143,6 +176,15 @@ class AgentSession:
             self._tool_message(tc, {"error": tc.parse_error + ". Reintenta con JSON válido."})
             return True
 
+        if tc.name == HANDOFF_TOOL and self.agent.handoffs:
+            target = str(tc.arguments.get("agente", ""))
+            if target not in self.agent.handoffs:
+                self._tool_message(tc, {"error": f"Agente '{target}' no válido. Opciones: {self.agent.handoffs}"})
+                return True
+            self.handoff = (target, str(tc.arguments.get("instrucciones", "")))
+            self._tool_message(tc, {"ok": f"Caso traspasado a {target}"})
+            return True
+
         t = registry.get(tc.name)
         if t is None or tc.name not in self.agent.tools:
             self._tool_message(tc, {"error": f"Herramienta '{tc.name}' no disponible para este agente"})
@@ -166,6 +208,12 @@ class AgentSession:
 
         self._execute(tc)
         return True
+
+    def _tool_schemas(self) -> list[dict[str, Any]] | None:
+        schemas = registry.schemas(self.agent.tools)
+        if self.agent.handoffs:
+            schemas.append(handoff_schema(self.agent.handoffs))
+        return schemas or None
 
     def _execute(self, tc: ToolCall, **extra: Any) -> None:
         result = {**registry.execute(tc.name, tc.arguments), **extra}

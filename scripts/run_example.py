@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app.sector  # noqa: E402,F401  registra tools y validadores
 from app.agents.engine import engine  # noqa: E402
 from app.logging_config import setup_logging  # noqa: E402
-from app.sector.agents import CASO_EJEMPLO as CASO, asistente  # noqa: E402
+from app.sector.agents import CASO_EJEMPLO as CASO, FLOW  # noqa: E402
 
 
 
@@ -31,7 +31,7 @@ def main() -> int:
     args = ap.parse_args()
     setup_logging("WARNING")
 
-    run = engine.start(asistente, CASO, case="ejemplo")
+    run = engine.start(FLOW, CASO, case="ejemplo")
     while run.status == "waiting_approval":
         for a in run.pending_approvals():
             print(f"\n*** Aprobación pendiente {a.id}: {a.tool}({a.arguments}) — {a.reason}")
