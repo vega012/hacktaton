@@ -51,7 +51,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_id UNINDEXED, doc
 CREATE TABLE IF NOT EXISTS discrepancias (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tipo TEXT NOT NULL,              -- contradice | actualiza | duplica | desactualizada
-    severidad TEXT DEFAULT 'media',  -- alta | media | baja
+    severidad TEXT DEFAULT 'media',  -- alta | media | informativa
     doc_a TEXT, chunk_a TEXT, cita_a TEXT,
     doc_b TEXT, chunk_b TEXT, cita_b TEXT,
     explicacion TEXT,
@@ -83,6 +83,24 @@ CREATE TABLE IF NOT EXISTS trazas (
     estado TEXT,
     created_at TEXT, updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS afirmaciones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id TEXT NOT NULL, chunk_id TEXT, articulo TEXT,
+    tema TEXT, valor REAL, unidad TEXT, condicion TEXT,
+    sentido TEXT,                    -- maximo | minimo
+    cita_literal TEXT,
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_afirmaciones_tema ON afirmaciones(tema);
+CREATE INDEX IF NOT EXISTS ix_afirmaciones_doc ON afirmaciones(doc_id);
+CREATE TABLE IF NOT EXISTS trazas_ingesta (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id TEXT, paso TEXT,
+    entrada TEXT, salida TEXT,
+    modelo TEXT, tokens INTEGER, latencia_ms INTEGER,
+    timestamp TEXT, usuario TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_trazas_ingesta_doc ON trazas_ingesta(doc_id, id);
 CREATE TABLE IF NOT EXISTS brechas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     consulta_id INTEGER, run_id TEXT,
@@ -97,7 +115,14 @@ MIGRACIONES = {
                   ("confianza_score", "REAL"), ("advertencia_conflicto", "INTEGER"),
                   ("advertencia_obsoleta", "INTEGER"), ("motivo_sin_cobertura", "TEXT")],
     "trazas": [("started_at", "TEXT"), ("finished_at", "TEXT")],
-    "documentos": [("reemplazada_por", "TEXT"), ("estado_actualizado_at", "TEXT")],
+    "documentos": [("reemplazada_por", "TEXT"), ("estado_actualizado_at", "TEXT"),
+                   # Agente 1 (ingesta y validación)
+                   ("codigo", "TEXT"), ("publicado", "INTEGER"), ("metadatos_json", "TEXT"),
+                   ("confianza_json", "TEXT"), ("requiere_confirmacion", "INTEGER"),
+                   ("estado_inferido", "INTEGER"), ("tipo_fuente", "TEXT"),
+                   ("etapa", "TEXT"), ("mensaje_ingesta", "TEXT")],
+    "discrepancias": [("tema", "TEXT"), ("art_a", "TEXT"), ("art_b", "TEXT"), ("version_a", "TEXT"),
+                      ("version_b", "TEXT"), ("prevalece", "TEXT"), ("motivo", "TEXT"), ("estado", "TEXT")],
 }
 
 
@@ -118,6 +143,19 @@ TEMAS = [
     "lavado_activos", "proteccion_consumidor", "transparencia_tasas", "gobierno_corporativo",
     "capital_basilea", "aprobaciones_y_autonomias", "seguridad_informacion", "otros",
 ]
+
+
+def traza_ingesta(doc_id: str | None, paso: str, entrada: Any = None, salida: Any = None,
+                  modelo: str | None = None, tokens: int | None = None, latencia_ms: int | None = None,
+                  usuario: str | None = None) -> None:
+    """Un paso del Agente 1 en trazas_ingesta (entrada/salida se guardan como JSON)."""
+    def _j(v: Any) -> str | None:
+        if v is None or isinstance(v, str):
+            return v
+        return json.dumps(v, ensure_ascii=False, default=str)
+    execute("INSERT INTO trazas_ingesta (doc_id, paso, entrada, salida, modelo, tokens, latencia_ms, timestamp,"
+            " usuario) VALUES (?,?,?,?,?,?,?,?,?)",
+            (doc_id, paso, _j(entrada), _j(salida), modelo, tokens, latencia_ms, now_ms(), usuario))
 
 
 def now() -> str:

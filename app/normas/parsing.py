@@ -11,7 +11,26 @@ from pathlib import Path
 
 log = logging.getLogger("parsing")
 
-ART_RE = re.compile(r"^\s*(Art[íi]culo|Art\.)\s+\d+", re.IGNORECASE | re.MULTILINE)
+# Encabezados de artículo, también en Markdown ("## Artículo 2.", "**Art. 3**")
+ART_RE = re.compile(r"^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?[ \t]*(Art[íi]culo|Art\.)[ \t]+\d+", re.IGNORECASE | re.MULTILINE)
+DISP_RE = re.compile(r"^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?[ \t]*Disposici[oó]n(?:es)?[ \t]+"
+                     r"(?:complementarias?[ \t]+)?finale?s?", re.IGNORECASE | re.MULTILINE)
+FM_RE = re.compile(r"\A﻿?\s*---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
+
+
+def separar_frontmatter(texto: str) -> tuple[dict[str, str | None], str]:
+    """Frontmatter YAML simple (clave: valor) al inicio del texto -> (dict, cuerpo). Valor vacío = None."""
+    m = FM_RE.match(texto or "")
+    if not m:
+        return {}, texto
+    fm: dict[str, str | None] = {}
+    for linea in m.group(1).splitlines():
+        if ":" not in linea or linea.lstrip().startswith("#"):
+            continue
+        k, v = linea.split(":", 1)
+        v = v.strip().strip('"').strip("'").strip()
+        fm[k.strip().lower()] = v or None
+    return fm, texto[m.end():]
 
 
 def _pdf(path: Path) -> list[tuple[int, str]]:
@@ -58,10 +77,13 @@ def es_basura(texto: str) -> tuple[bool, str]:
     sin_esp = re.sub(r"\s", "", texto)
     if len(sin_esp) < 50:
         return True, "Texto vacío o casi vacío (¿PDF escaneado sin OCR?)"
+    sin_esp = re.sub(r"[|#*>\-]", "", sin_esp)  # marcas de Markdown/tablas no cuentan como basura
+    if not sin_esp:
+        return True, "Texto vacío o casi vacío"
     no_alfa = sum(1 for c in sin_esp if not c.isalpha())
     if no_alfa / len(sin_esp) > 0.30:
         return True, f"{no_alfa / len(sin_esp):.0%} de caracteres no alfabéticos"
-    if not ART_RE.search(texto):
+    if not ART_RE.search(texto) and not DISP_RE.search(texto):
         return True, "No se detectaron artículos numerados"
     return False, ""
 
@@ -76,6 +98,7 @@ def parsear(path: str | Path) -> tuple[list[tuple[int, str]], bool, str]:
     elif ext in (".txt", ".md", ""):
         pages = _txt(path)
     else:
-        raise ValueError(f"Formato no soportado: {ext} (usa PDF, DOCX o TXT)")
-    basura, motivo = es_basura("\n".join(t for _, t in pages))
+        raise ValueError(f"Formato no soportado: {ext} (usa PDF, DOCX, TXT o MD)")
+    _, cuerpo = separar_frontmatter("\n".join(t for _, t in pages))
+    basura, motivo = es_basura(cuerpo)
     return pages, basura, motivo

@@ -13,7 +13,8 @@ Uso:
     hits[0].id, hits[0].score, hits[0].rerank_score, hits[0].text, hits[0].metadata
 
 Metadatos por registro (ver docs/CONTRATOS.md): doc_id, nombre_norma, entidad, tipo, tema, articulo,
-pagina, fecha_emision (int AAAAMMDD), fecha_vigencia (int AAAAMMDD), estado, version, reemplaza_a.
+pagina, fecha_emision (int AAAAMMDD), fecha_vigencia (int AAAAMMDD), estado, version, reemplaza_a,
+codigo, tema, temas (lista).
 Filtros con la sintaxis de Pinecone: {"campo": valor}, $eq $ne $in $nin $gt $gte $lt $lte, $and, $or.
 """
 from __future__ import annotations
@@ -71,6 +72,10 @@ class VectorStore:
         raise NotImplementedError
 
     def delete_all(self) -> None:
+        raise NotImplementedError
+
+    def contar_prefijo(self, prefijo: str) -> int:
+        """Cantidad de registros cuyo id empieza con `prefijo` (para verificar idempotencia)."""
         raise NotImplementedError
 
 
@@ -135,6 +140,12 @@ class PineconeStore(VectorStore):
         if ids:
             self.index.delete(ids=ids, namespace=self.ns)
 
+    def contar_prefijo(self, prefijo: str) -> int:
+        n = 0
+        for ids in self.index.list(prefix=prefijo, namespace=self.ns):
+            n += len(ids)
+        return n
+
     def delete_all(self) -> None:
         try:
             self.index.delete(delete_all=True, namespace=self.ns)
@@ -162,7 +173,9 @@ def _tokens(text: str) -> list[str]:
 
 _OPS = {
     "$eq": lambda v, r: v == r, "$ne": lambda v, r: v != r,
-    "$in": lambda v, r: v in r, "$nin": lambda v, r: v not in r,
+    # listas en metadatos (p. ej. temas): $in/$nin por intersección, como Pinecone
+    "$in": lambda v, r: bool(set(v) & set(r)) if isinstance(v, list) else v in r,
+    "$nin": lambda v, r: not (set(v) & set(r)) if isinstance(v, list) else v not in r,
     "$gt": lambda v, r: v is not None and v > r, "$gte": lambda v, r: v is not None and v >= r,
     "$lt": lambda v, r: v is not None and v < r, "$lte": lambda v, r: v is not None and v <= r,
 }
@@ -238,6 +251,9 @@ class LocalStore(VectorStore):
     def delete_all(self) -> None:
         with self.lock:
             self._save({})
+
+    def contar_prefijo(self, prefijo: str) -> int:
+        return sum(1 for k in self._load() if k.startswith(prefijo))
 
 
 @lru_cache

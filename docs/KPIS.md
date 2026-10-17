@@ -28,4 +28,8 @@ Notas:
 - **Los scores de Pinecone (rerank bge-reranker-v2-m3, 0–1) y del índice local (similitud léxica, valores
   bajos) no son comparables**: el umbral por defecto depende del backend (`backend` en la respuesta) y no
   conviene comparar `confianza_promedio` entre backends.
+- Agente 1 (validador): guarda un Run en `trazas` (agente `validador`, con los fragmentos recuperados del índice con id
+  y score) solo cuando la validación recuperó fragmentos o registró discrepancias. Una validación sin nada que
+  recuperar (primer documento de un tema) queda trazada paso a paso en `trazas_ingesta`, no en `trazas`.
+  Discrepancias por severidad: `alta | media | informativa` (las tres claves siempre presentes en `por_severidad`).
 - Datos de demo: `scripts/poblar_demo.py` genera interacciones reales contra la API (nada inventado).

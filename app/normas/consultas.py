@@ -152,6 +152,7 @@ def _conflictos(doc_ids: list[str]) -> list[dict[str, Any]]:
     return db.query(
         f"SELECT id, tipo, severidad, doc_a, chunk_a, cita_a, doc_b, chunk_b, cita_b, explicacion, estado_revision "
         f"FROM discrepancias WHERE estado_revision != 'descartada' AND tipo = 'contradice' "
+        f"AND COALESCE(estado, 'abierta') != 'resuelta' "
         f"AND (doc_a IN ({ph}) OR doc_b IN ({ph})) ORDER BY id DESC", (*ids, *ids))
 
 

@@ -7,17 +7,56 @@
 - `app/llm_client.py`: `get_llm().chat(messages, tools=None, temperature=0)`.
 
 ## Registro en Pinecone
-`id = "<doc_id>#art-<n>#c<k>"`, `text` = texto con prefijo `[<nombre_norma> v<version> · Art. <n>]`.
-Metadatos: `doc_id, nombre_norma, entidad, tipo, tema, articulo, pagina, fecha_emision (int), fecha_vigencia (int), estado, version, reemplaza_a`.
+`id = "{codigo}_{version}_art-{n}"` (disposiciones finales: `_df-{k}`; artículo largo partido: `_p{k}`), sanitizado a
+`[A-Za-z0-9._-]`. Es determinístico: re-subir/re-indexar hace upsert y no duplica.
+`text` = texto con prefijo `[<nombre_norma> v<version> · Art. <n>]`.
+Metadatos: `doc_id, codigo, nombre_norma, entidad, tipo (externa|interna), tema (tema principal del doc), temas
+(lista de temas de las afirmaciones de ese artículo; se omite si no hay), articulo, pagina, fecha_emision (int),
+fecha_vigencia (int), estado, version, reemplaza_a`.
+`estado` en el índice: `vigente | por_entrar_en_vigencia | reemplazada | pendiente_revision | rechazada | procesando`.
+El Agente 2 filtra `estado = vigente`, así que nunca usa normas pendientes de revisión, rechazadas o en proceso.
 
-## Frente A — Ingesta y validación (`app/normas/api_documentos.py`)
+## Frente A — Agente 1: ingesta y validación (`app/normas/ingesta.py`, `validacion.py`, `api_documentos.py`)
+Pipeline (cada paso deja una fila en `trazas_ingesta`): recepcion (archivo, sha256) -> metadatos (frontmatter o LLM
+con confianza 0-1 por campo) -> chunks -> afirmaciones (1 llamada LLM por documento) -> indexacion -> candidatos ->
+comparacion -> discrepancia_confirmada / discrepancia_descartada (motivo) -> publicacion -> decision_usuario.
+
 | Ruta | Entrada | Salida |
 |---|---|---|
-| `POST /api/documentos` | multipart `archivo` | `{doc_id, run_id, estado_ingesta}` |
-| `GET /api/documentos` | — | `[{doc_id, nombre_norma, entidad, tipo, tema, fecha_emision, fecha_vigencia, estado, version, reemplaza_a, n_chunks, estado_ingesta}]` |
-| `GET /api/documentos/{doc_id}` | — | documento + `chunks` + `discrepancias` |
-| `GET /api/discrepancias?doc_id=` | — | `[{id, tipo, severidad, doc_a, cita_a, doc_b, cita_b, explicacion, estado_revision, created_at}]` |
-| `POST /api/discrepancias/{id}/revisar` | `{decision: "confirmada"|"descartada", comentario}` | `{ok}` |
+| `POST /api/documentos` | multipart `archivo` (PDF/DOCX/TXT/MD) | **202** `{doc_id, codigo, estado_ingesta, duplicado, mensaje}`; procesa en un hilo. **400** si el nombre empieza con `00_GUIA` o contiene `NO_SUBIR`, o formato no soportado. Duplicado (mismo sha256): `duplicado: true`, no reindexa |
+| `GET /api/documentos` | — | `[{doc_id, codigo, nombre_norma, entidad, tipo_fuente, tema, fecha_emision, fecha_vigencia, estado, estado_inferido, version, reemplaza_a, reemplazada_por, publicado, requiere_confirmacion, estado_ingesta, etapa, mensaje_ingesta, n_chunks, run_id, created_at}]` |
+| `GET /api/documentos/{doc_id}/progreso` | — | `{doc_id, etapa, mensaje, n_discrepancias_altas, estado, publicado, estado_ingesta}`; `etapa`: `recibido | extrayendo_metadatos | indexando | comparando | informe | listo | requiere_revision | error` |
+| `GET /api/documentos/{doc_id}` | — | lo de la lista + `archivo, sha256, metadatos_json` (objeto: `campos, fuente, origen, faltantes, baja_confianza, advertencias, deroga`) + `confianza_json` (objeto campo -> 0-1) + `chunks:[{chunk_id, articulo, seccion, pagina, texto}]` + `afirmaciones:[{id, chunk_id, articulo, tema, valor, unidad, condicion, sentido, cita_literal}]` + `discrepancias` (formato de abajo) |
+| `GET /api/documentos/{doc_id}/traza` | — | `[{id, doc_id, paso, entrada, salida, modelo, tokens, latencia_ms, timestamp, usuario}]` ordenado (entrada/salida como objeto JSON cuando aplica) |
+| `POST /api/documentos/{doc_id}/decision` | `{decision: "aprobar_publicar" | "publicar_igual" | "rechazar", usuario, comentario}` | `{ok, estado, publicado}` |
+| `GET /api/discrepancias?doc_id=&tema=&estado=&severidad=` | — | `[{id, tema, severidad, tipo, doc_a, chunk_a, art_a, version_a, cita_a, doc_b, chunk_b, art_b, version_b, cita_b, prevalece, motivo, explicacion, estado, estado_revision, comentario, run_id, created_at, nombre_a, nombre_b}]` |
+| `POST /api/discrepancias/{id}/revisar` | `{decision: "confirmada" | "descartada", comentario}` | `{ok}` |
+
+Valores:
+- `documentos.estado`: `vigente | por_entrar_en_vigencia | reemplazada | pendiente_revision | rechazada | procesando`.
+  `estado_inferido = 1` si el documento no declaraba estado (se infiere por fechas). `tipo_fuente`: `externa` si la
+  entidad es reguladora (SBS, SMV, BCRP, UIF, SUNAT, MEF, Congreso, Ministerio...), si no `interna`.
+- `estado_ingesta`: `procesando | indexado | requiere_revision | error`. `requiere_revision` = poco texto o sin
+  artículos: **no se indexa**; `mensaje_ingesta` explica qué revisar.
+- `requiere_confirmacion = 1`: falta un metadato obligatorio, alguno tiene confianza < 0.7, o hay advertencias
+  (fecha_vigencia < fecha_emision, reemplazo de una norma con fecha posterior, que no se aplica).
+- Discrepancia `severidad`: `alta | media | informativa`; `tipo`: `contradice | mas_estricta | actualiza`;
+  `estado`: `abierta | resuelta`; `prevalece` = doc_id que prevalece y `motivo` = por qué (jerarquía calculada en código).
+  - ALTA: interna menos estricta (o distinta) que una externa vigente. Prevalece la externa.
+  - MEDIA: interna vs interna, o externa vs externa: prevalece la más reciente (vigencia, luego emisión).
+  - INFORMATIVA: interna más estricta que la externa (`mas_estricta`), o diferencia contra la versión que la norma
+    nueva reemplaza (`actualiza`).
+- Control humano: si el documento nuevo es la norma **interna** de una discrepancia ALTA, queda
+  `estado = pendiente_revision`, `publicado = 0` y sus chunks con `estado = pendiente_revision` en el índice. Si el
+  documento nuevo es la **externa**, se publica (prevalece) y la ALTA queda abierta señalando la interna a adecuar.
+  `aprobar_publicar` publica y marca sus discrepancias `resuelta`; `publicar_igual` publica y las deja `abierta`
+  (el Agente 2 sigue advirtiendo); `rechazar` -> `estado = rechazada`, `publicado = 0`, sus discrepancias `resuelta`.
+- Reemplazo: `reemplaza_a` declarado o cláusula de derogación (deróguese / déjese sin efecto / queda sin efecto + código).
+  Se aplica al **publicar** la norma nueva: la anterior pasa a `reemplazada` (SQLite e índice), con `reemplazada_por` y
+  `estado_actualizado_at`, y sus discrepancias abiertas pasan a `resuelta`. Si la anterior se carga después, queda
+  `reemplazada` al cargarse. Nunca se borra nada.
+- El Agente 2 (`consultas.py`, `casos.py`) lee `discrepancias` con `tipo = 'contradice'`, `estado_revision != 'descartada'`
+  y `estado != 'resuelta'`, usando `doc_a/doc_b/chunk_a/chunk_b`.
 
 ## Frente B — Consultas, trazas y dashboard (`app/normas/api_consultas.py`)
 | Ruta | Entrada | Salida |

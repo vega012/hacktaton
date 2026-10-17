@@ -156,7 +156,8 @@ def calcular(desde: str | None = None, hasta: str | None = None, umbral: float |
     afectados = sorted(({"doc_id": k, "nombre_norma": (docs.get(k) or {}).get("nombre_norma"), "n": len(v),
                          "afectados": sorted(v)} for k, v in afect.items()), key=lambda x: (-x["n"], x["doc_id"]))
     prevencion = {
-        "discrepancias": {"total": len(disc), "por_severidad": dict(Counter(r["severidad"] for r in disc)),
+        "discrepancias": {"total": len(disc), "por_severidad": {"alta": 0, "media": 0, "informativa": 0,
+                                                            **Counter(r["severidad"] for r in disc)},
                           "por_tipo": dict(Counter(r["tipo"] for r in disc))},
         "normas_obsoletas": {"total": len(obsoletas), "lista": obsoletas},
         "afectados_por_norma": afectados,
