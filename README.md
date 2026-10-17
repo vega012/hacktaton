@@ -140,4 +140,4 @@ implementado.
 
 ## Código
 
-Repositorio: _[completar URL pública]_
+Repositorio: **https://github.com/vega012/hacktaton**

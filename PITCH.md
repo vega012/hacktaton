@@ -67,7 +67,7 @@ Hipótesis a validar con el banco (no son mediciones):
 
 ## 6. Código (15 s)
 
-- Repositorio: **[URL]**
+- Repositorio: **https://github.com/vega012/hacktaton**
 - Stack: Python, FastAPI, Pinecone (embeddings integrados + rerank), SQLite, Streamlit, LLM vía API compatible
   con OpenAI, Docker Compose, Caddy.
 - Próximos pasos: cargar el corpus real del banco y de la SBS, OCR para PDFs escaneados, integración con el
