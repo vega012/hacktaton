@@ -8,7 +8,12 @@ if [[ ! -f .env ]]; then
   echo "ERROR: falta .env. Copia .env.example a .env y completa DEEPSEEK_API_KEY y APP_HOST." >&2
   exit 1
 fi
-set -a; source .env; set +a
+# Leer solo las variables necesarias (sin ejecutar .env: puede tener valores con espacios)
+env_get() { grep -E "^$1=" .env | tail -1 | cut -d= -f2- | sed -e "s/^[\"']//" -e "s/[\"']\$//" || true; }
+DEEPSEEK_API_KEY="$(env_get DEEPSEEK_API_KEY)"
+APP_HOST="$(env_get APP_HOST)"
+CADDY_MODE="$(env_get CADDY_MODE)"
+PORT="$(env_get PORT)"
 : "${DEEPSEEK_API_KEY:?Falta DEEPSEEK_API_KEY en .env}"
 MODE="${CADDY_MODE:-https}"
 if [[ "$MODE" == "https" ]]; then
