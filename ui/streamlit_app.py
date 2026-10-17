@@ -398,6 +398,63 @@ def _subir_y_seguir(nombre: str, contenido: bytes, timeout_s: float = 180, inter
     return res
 
 
+SEV_ORDEN = ["alta", "media", "informativa"]
+SEV_COLOR = {"alta": "#B3362F", "media": "#9A6200", "informativa": "#0F4C5C"}
+
+
+@st.dialog("Discrepancias detectadas", width="large")
+def _popup_discrepancias(severidad: str) -> None:
+    """Ventana emergente con las discrepancias de una severidad (desde el gráfico de KPIs)."""
+    lista, err = api("GET", "/discrepancias", params={"severidad": severidad})
+    if err:
+        st.warning(f"No se pudieron cargar las discrepancias: {err}")
+        return
+    lista = [d for d in (lista or []) if isinstance(d, dict) and d.get("estado_revision") != "descartada"]
+    st.caption(f"Severidad {severidad.upper()} · {len(lista)} discrepancia(s)")
+    if not lista:
+        st.info("sin datos")
+        return
+    render_discrepancias(lista, kp=f"dlg_{severidad}", filtros=False)
+
+
+def _grafico_discrepancias(por_severidad: dict) -> None:
+    """Barras por severidad; al hacer clic en una barra (o en su botón) se abren sus discrepancias."""
+    import altair as alt
+    df = pd.DataFrame([{"severidad": k, "n": int(por_severidad.get(k) or 0)} for k in SEV_ORDEN
+                       if k in por_severidad] +
+                      [{"severidad": k, "n": int(v or 0)} for k, v in por_severidad.items() if k not in SEV_ORDEN])
+    sel = alt.selection_point(name="sev", fields=["severidad"], on="click")
+    chart = (alt.Chart(df).mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4, cursor="pointer")
+             .encode(x=alt.X("severidad:N", sort=SEV_ORDEN, title=None, axis=alt.Axis(labelAngle=0)),
+                     y=alt.Y("n:Q", title=None, axis=alt.Axis(tickMinStep=1)),
+                     color=alt.Color("severidad:N", scale=alt.Scale(domain=list(SEV_COLOR), range=list(SEV_COLOR.values())),
+                                     legend=None),
+                     opacity=alt.condition(sel, alt.value(1), alt.value(0.55)),
+                     tooltip=[alt.Tooltip("severidad:N", title="Severidad"), alt.Tooltip("n:Q", title="Discrepancias")])
+             .add_params(sel).properties(height=220))
+    ev = st.altair_chart(chart, width="stretch", on_select="rerun", key="kpi_disc_chart")
+    elegida = None
+    try:
+        puntos = (ev.selection or {}).get("sev") or []
+        elegida = puntos[0].get("severidad") if puntos else None
+    except Exception:
+        elegida = None
+    st.caption("Haz clic en una barra para ver sus discrepancias.")
+    cols = st.columns(len(df))
+    for c, fila in zip(cols, df.itertuples()):
+        if c.button(f"Ver {fila.severidad} ({fila.n})", key=f"kpi_disc_btn_{fila.severidad}", disabled=not fila.n,
+                    width="stretch"):
+            elegida = fila.severidad
+            st.session_state["_kpi_disc_ult"] = None  # el botón siempre abre
+    # el gráfico conserva la selección entre recargas: abrir solo cuando cambia
+    if elegida and st.session_state.get("_kpi_disc_ult") != elegida:
+        st.session_state["_kpi_disc_ult"] = elegida
+        _popup_discrepancias(elegida)
+    elif not elegida:
+        st.session_state["_kpi_disc_ult"] = None
+
+
+
 def render_discrepancias(lista: list, kp: str, filtros: bool = True) -> None:
     """Informe de discrepancias A | B con severidad, prevalencia y botones de revisión."""
     lista = [d for d in (lista or []) if isinstance(d, dict)]
@@ -1033,7 +1090,7 @@ with tabs[4]:
                 st.caption(f"por tipo: {_desglose(_g(disc, 'por_tipo'))}")
                 ps = _g(disc, "por_severidad", default={})
                 if isinstance(ps, dict) and ps and hay_valores(pd.Series(ps)):
-                    st.bar_chart(pd.Series(ps, name="discrepancias"), color="#0F4C5C")
+                    _grafico_discrepancias(ps)
             obs = _g(prev, "normas_obsoletas", default={})
             with b[1].container(border=True):
                 st.metric("6 · Normas obsoletas o reemplazadas", _g(obs, "total", default=0))
