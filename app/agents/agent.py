@@ -83,7 +83,8 @@ class AgentSession:
                           + (f" — {approval.comment}" if approval.comment else ""),
                           approval_id=approval.id)
         if approval.status == "approved":
-            self._execute(tc)
+            self._execute(tc, aprobacion=f"Aprobada por {approval.decided_by or 'humano'}"
+                          + (f": {approval.comment}" if approval.comment else ""))
         else:
             self._tool_message(tc, {"error": "Acción rechazada por el aprobador humano",
                                     "comentario": approval.comment or ""})
@@ -166,8 +167,8 @@ class AgentSession:
         self._execute(tc)
         return True
 
-    def _execute(self, tc: ToolCall) -> None:
-        result = registry.execute(tc.name, tc.arguments)
+    def _execute(self, tc: ToolCall, **extra: Any) -> None:
+        result = {**registry.execute(tc.name, tc.arguments), **extra}
         self.run.add_step(self.agent.name, "tool_result",
                           _short(json.dumps(result, ensure_ascii=False)), tool=tc.name, result=result)
         self._tool_message(tc, result)

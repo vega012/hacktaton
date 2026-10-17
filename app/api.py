@@ -1,6 +1,9 @@
 """API JSON: lanzar casos, consultar trazas y resolver aprobaciones."""
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -10,6 +13,8 @@ from app.agents.trace import store
 from app.sector.agents import CASO_EJEMPLO, asistente
 
 router = APIRouter(prefix="/api")
+
+UI_CONFIG = Path(__file__).resolve().parents[1] / "config" / "ui.json"
 
 
 class RunRequest(BaseModel):
@@ -21,6 +26,12 @@ class DecisionRequest(BaseModel):
     approved: bool
     by: str = "supervisor"
     comment: str | None = None
+
+
+@router.get("/ui")
+def ui_config() -> dict:
+    """Textos de la interfaz (editables en config/ui.json) + caso de ejemplo."""
+    return {"ui": json.loads(UI_CONFIG.read_text(encoding="utf-8")), "example": CASO_EJEMPLO}
 
 
 @router.get("/example")
