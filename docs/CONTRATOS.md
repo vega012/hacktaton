@@ -59,3 +59,43 @@ Respuesta de `POST /api/chat`:
   }
 }
 ```
+
+## KPIs (`app/normas/kpis.py`, `app/normas/api_kpis.py`, sección KPIs en `ui/streamlit_app.py`)
+Regla: todo sale de datos registrados por los agentes. `valor: null` = **sin datos** (la UI muestra "sin datos").
+Cada porcentaje trae `num` y `den` para poder explicar de dónde sale.
+
+`GET /api/kpis?desde=&hasta=&umbral=&tiempo_manual_min=15&granularidad=hora`
+(`desde`/`hasta`: fecha `AAAA-MM-DD` o fecha-hora ISO; `granularidad`: `10min | hora | dia`; `umbral` por defecto U2 del backend)
+```json
+{
+  "rango": {"desde": "...", "hasta": "..."}, "backend": "pinecone | local", "umbral": 0.10, "generado_at": "...",
+  "calidad": {
+    "total_consultas": 40, "por_tipo": {"consulta": 32, "caso": 8},
+    "con_cita":           {"valor": 0.85, "num": 34, "den": 40},
+    "sin_cobertura":      {"valor": 0.15, "num": 6, "den": 40, "no_encontro": 4, "score_bajo": 2},
+    "con_advertencia":    {"valor": 0.40, "num": 16, "den": 40, "conflicto": 9, "obsoleta": 11},
+    "confianza_promedio": {"valor": 0.71, "n": 34, "distribucion": {"alta": 20, "media": 14, "sin_respaldo": 6}}
+  },
+  "prevencion": {
+    "discrepancias": {"total": 3, "por_severidad": {"alta": 1, "media": 2}, "por_tipo": {"contradice": 1, "actualiza": 2}},
+    "normas_obsoletas": {"total": 1, "lista": [{"doc_id", "nombre_norma", "estado", "reemplazada_por"}]},
+    "afectados_por_norma": [{"doc_id", "nombre_norma", "n": 2, "afectados": ["SINT-02", "SINT-01"]}]
+  },
+  "eficiencia": {
+    "tiempo_respuesta_s": {"promedio": 12.3, "mediana": 9.8, "n": 40,
+                           "por_agente": {"consultas": {"promedio", "mediana", "n"}, "analista_casos": {...}, "validador": {...}}},
+    "tiempo_ahorrado": {"estimado": true, "tiempo_manual_min": 15, "consultas": 40, "horas": 9.9,
+                        "supuesto": "consultas × (tiempo manual de referencia − tiempo promedio del agente)"}
+  },
+  "trazabilidad": {
+    "trazas_completas": {"valor": 1.0, "num": 44, "den": 44, "incompletas": [{"run_id", "agente", "faltan": ["fragmentos"]}]},
+    "top_normas": [{"doc_id", "nombre_norma", "n"}],
+    "brechas": [{"tema", "n", "ejemplos": ["..."]}]
+  },
+  "tendencia": {
+    "granularidad": "hora",
+    "consultas": [{"t": "2026-10-17T13:00", "n": 12, "sin_cobertura": 2}],
+    "brechas_por_tema": [{"tema", "n"}]
+  }
+}
+```
