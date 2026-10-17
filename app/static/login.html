@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingresar · Normativa Bancaria</title>
+<style>
+:root{--bg:#eef3f5;--panel:#fff;--fg:#14262e;--muted:#5a6d75;--line:#d5e0e4;--acc:#0f5868;--err:#b3261e;--err-bg:#fbe5e3}
+@media (prefers-color-scheme: dark){:root{--bg:#0d171b;--panel:#152329;--fg:#e2ecef;--muted:#93a7ae;--line:#26383f;--acc:#5fb7c9;--err:#ff8a80;--err-bg:#3d1a17}}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);
+  font:17px/1.5 "Segoe UI",system-ui,sans-serif;padding:16px}
+.card{width:min(420px,100%);background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:32px 28px;
+  display:grid;gap:18px;box-shadow:0 8px 30px rgba(0,0,0,.08)}
+.logo{width:44px;height:44px;border-radius:10px;background:var(--acc);color:#fff;display:grid;place-items:center;
+  font-size:24px;font-weight:700}
+h1{margin:0;font-size:22px}
+p{margin:0;color:var(--muted);font-size:15px}
+label{display:grid;gap:6px;font-weight:600;font-size:15px}
+input{font:inherit;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
+input:focus{outline:2px solid var(--acc);outline-offset:1px}
+button{font:inherit;font-weight:600;padding:12px;border:0;border-radius:8px;background:var(--acc);color:#fff;cursor:pointer}
+.err{background:var(--err-bg);color:var(--err);padding:10px 12px;border-radius:8px;font-size:15px}
+.roles{font-size:14px;color:var(--muted);border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<form class="card" method="post" action="/login">
+  <div class="logo" aria-hidden="true">§</div>
+  <div>
+    <h1>Normativa Bancaria · Agentes de IA</h1>
+    <p>Ingresa con tu usuario</p>
+  </div>
+  <div class="err" id="err" hidden>Usuario o contraseña incorrectos.</div>
+  <label>Usuario <input name="usuario" id="usuario" autocomplete="username" required autofocus></label>
+  <label>Contraseña <input name="clave" id="clave" type="password" autocomplete="current-password" required></label>
+  <input type="hidden" name="next" id="next">
+  <button type="submit">Ingresar</button>
+  <div class="roles"><b>Administrador:</b> panel de normas, discrepancias, trazas, dashboard y KPIs.<br>
+    <b>Empleado:</b> chat de consultas y evaluación de casos.</div>
+</form>
+<script>
+var q = new URLSearchParams(location.search);
+if (q.get("error")) document.getElementById("err").hidden = false;
+document.getElementById("next").value = q.get("next") || "";
+</script>
+</body>
+</html>

@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     api_base_url: str = "http://127.0.0.1:8000"   # usado por el bot y Streamlit
 
+    # Usuarios (login): admin = panel completo + chat; empleado = solo chat
+    admin_user: str = "admin"
+    admin_password: str = ""
+    empleado_user: str = "empleado"
+    empleado_password: str = ""
+    auth_secret: str = "cambiar-este-secreto"
+
     # Comportamiento del cliente LLM
     llm_timeout: float = 60.0          # segundos por request
     llm_max_retries: int = 3           # reintentos ante errores transitorios

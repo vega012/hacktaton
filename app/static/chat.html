@@ -183,7 +183,9 @@ details>summary{cursor:pointer}
     <p>Evalúa casos contra las políticas y normas vigentes, con citas verificables</p>
   </div>
   <div class="sp"></div>
-  <a href="/" title="Normas, discrepancias y dashboard">Panel de administración</a>
+  <span id="who" style="opacity:.85;font-size:15px"></span>
+  <a href="/" id="adminlink" title="Normas, discrepancias, trazas y dashboard" hidden>Panel de administración</a>
+  <a href="/logout" title="Cerrar sesión">Salir</a>
   <button class="hbtn" id="newconv" type="button">Nueva conversación</button>
 </header>
 <main>
@@ -376,7 +378,7 @@ function bubbleAgent(r){
   var meta = h("div", {class:"meta"}, confBadge(r.confianza));
   if (r.latencia_ms != null && r.latencia_ms !== "") add(meta, h("span", {text: "Latencia " + (Number(r.latencia_ms) / 1000).toFixed(1) + " s"}));
   var rid = r.run_id;
-  add(meta, h("button", {class:"linkbtn", type:"button", text:"Ver razonamiento del agente", onclick: function(){ openTrace(rid); }}));
+  // El razonamiento del agente se revisa en Trazas (panel del administrador), no en el chat del empleado.
   add(b, meta);
   msgs.appendChild(h("div", {class:"row a"}, b));
   scrollEnd();
@@ -589,6 +591,10 @@ function openTrace(runId){
   });
 }
 
+fetch("/auth/me", {credentials: "same-origin"}).then(function(r){ return r.json(); }).then(function(me){
+  if (me && me.usuario) $("who").textContent = me.usuario + (me.rol === "admin" ? " · administrador" : " · empleado");
+  if (me && me.rol === "admin") $("adminlink").hidden = false;
+}).catch(function(){});
 cargarHistorial();
 inp.focus();
 })();

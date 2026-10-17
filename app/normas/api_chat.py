@@ -8,7 +8,7 @@ import re
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
 from app.normas import db
@@ -23,7 +23,7 @@ MAX_BYTES = 10 * 1024 * 1024
 
 @router.post("/chat")
 async def chat(session_id: str = Form(...), mensaje: str = Form(""),
-               archivo: UploadFile | None = File(None)) -> dict:
+               archivo: UploadFile | None = File(None), x_usuario: str | None = Header(None)) -> dict:
     from app.normas.casos import chat as chat_casos  # import diferido: registra las tools al usarse
     ruta: Path | None = None
     if archivo is not None and archivo.filename:
@@ -39,6 +39,8 @@ async def chat(session_id: str = Form(...), mensaje: str = Form(""),
         ruta.write_bytes(contenido)
     if not (mensaje or "").strip() and ruta is None:
         raise HTTPException(400, "Envía un mensaje o un archivo")
+    if x_usuario and not session_id.startswith(f"{x_usuario}:"):
+        session_id = f"{x_usuario}:{session_id}"  # el usuario autenticado queda en la traza
     return await run_in_threadpool(chat_casos, session_id, mensaje, ruta)
 
 
@@ -53,6 +55,8 @@ def ejemplos() -> list[dict]:
 
 
 @router.get("/chat/{session_id}")
-def historial(session_id: str) -> list[dict]:
+def historial(session_id: str, x_usuario: str | None = Header(None)) -> list[dict]:
+    if x_usuario and not session_id.startswith(f"{x_usuario}:"):
+        session_id = f"{x_usuario}:{session_id}"
     from app.normas.casos import historial as hist
     return hist(session_id)

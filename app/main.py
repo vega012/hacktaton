@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
 from app.api import router as api_router
+from app.auth import router as auth_router
 from app.normas.api import router as normas_router
 from app.config import get_settings
 from app.logging_config import setup_logging
@@ -31,6 +32,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app.include_router(auth_router)
 app.include_router(api_router)
 app.include_router(normas_router)
 
