@@ -2,11 +2,35 @@ services:
   app:
     build: .
     env_file: .env
+    # Solo accesible desde el propio servidor (health checks). El público entra por Caddy.
     ports:
-      - "${PORT:-8000}:8000"
+      - "127.0.0.1:${PORT:-8000}:8000"
+    volumes:
+      - runs:/code/runs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - app
+    environment:
+      APP_HOST: ${APP_HOST:-localhost}
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      # CADDY_MODE=https (por defecto) | http (plan B)
+      - ./caddy/${CADDY_MODE:-https}.Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  runs:
+  caddy_data:   # guarda los certificados: no borrar entre despliegues
+  caddy_config:

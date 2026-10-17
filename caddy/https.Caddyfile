@@ -1,0 +1,6 @@
+# Modo HTTPS (por defecto): Caddy obtiene el certificado automáticamente para APP_HOST.
+# APP_HOST = <IP-con-guiones>.sslip.io (ej. 203-0-113-5.sslip.io)
+{$APP_HOST} {
+	encode gzip
+	reverse_proxy app:8000
+}

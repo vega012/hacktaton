@@ -9,7 +9,7 @@ Esqueleto genérico de un sistema multi-agente (FastAPI + DeepSeek) para el hack
 ```bash
 cp .env.example .env        # y completa DEEPSEEK_API_KEY
 docker compose up --build
-curl http://localhost:8000/health
+curl http://localhost:8000/health    # app directa (Caddy publica 80/443)
 ```
 
 Sin Docker:
@@ -21,3 +21,7 @@ uvicorn app.main:app --reload
 ```
 
 > README en construcción: problema, solución, arquitectura y guías se completan en la etapa 8.
+
+## Despliegue
+
+Ver [DEPLOY.md](DEPLOY.md). Redespliegue: `ssh <usuario>@<IP> 'cd ~/hacktaton && ./deploy.sh'`.

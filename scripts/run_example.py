@@ -13,12 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app.sector  # noqa: E402,F401  registra tools y validadores
 from app.agents.engine import engine  # noqa: E402
 from app.logging_config import setup_logging  # noqa: E402
-from app.sector.agents import asistente  # noqa: E402
+from app.sector.agents import CASO_EJEMPLO as CASO, asistente  # noqa: E402
 
-CASO = (
-    "Revisa las entidades ENT-001 y ENT-002. A cada una que esté activa créale una orden de 3000 "
-    "por 'mantenimiento preventivo'. Luego resume qué se hizo."
-)
 
 
 def print_trace(run) -> None:

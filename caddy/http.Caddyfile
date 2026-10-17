@@ -1,0 +1,5 @@
+# Plan B (CADDY_MODE=http): sirve la app por HTTP directo en la IP, sin certificado.
+:80 {
+	encode gzip
+	reverse_proxy app:8000
+}

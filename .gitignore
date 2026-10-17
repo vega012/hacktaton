@@ -1,4 +1,8 @@
+# Secretos: nunca al repo
 .env
+.env.*
+!.env.example
+
 __pycache__/
 *.pyc
 .venv/
@@ -9,5 +13,5 @@ venv/
 *.db
 .idea/
 .vscode/
-inicio.txt
 runs/
+inicio.txt
