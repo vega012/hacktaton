@@ -65,6 +65,11 @@ h3.sec{font-size:15px;text-transform:uppercase;letter-spacing:.6px;color:var(--m
 .cite .hd{font-weight:600;font-size:16px}
 .cite .hd small{font-weight:400;color:var(--muted)}
 .cite q,.quote{display:block;margin-top:6px;font-style:italic;color:var(--text);opacity:.9;quotes:"\201C" "\201D"}
+.aplica{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px;font-size:13px;color:var(--muted)}
+.achip{display:inline-block;font-size:13px;padding:1px 9px;border-radius:999px;background:var(--gray-bg);color:var(--muted);border:1px solid var(--line)}
+.nota-area{margin-top:8px;font-size:14px;background:var(--warn-bg);color:var(--text);border:1px solid var(--warn);border-left-width:4px;border-radius:8px;padding:6px 10px}
+.coord{display:flex;flex-wrap:wrap;gap:8px}
+.coord .achip{font-size:15px;padding:3px 12px;background:var(--info-bg);color:var(--info);border-color:var(--info)}
 .warns{display:grid;gap:8px;margin-top:12px}
 .warnbox{background:var(--warn-bg);border:1px solid var(--warn);border-radius:10px;padding:10px 14px}
 .warnbox b{color:var(--warn)}
@@ -312,6 +317,12 @@ function estadoBadge(e){
   var cls = e === "vigente" ? "b-ok" : (e === "derogada" || e === "derogado" ? "b-bad" : "b-warn");
   return h("span", {class:"badge " + cls, text: e});
 }
+function strs(v){ return arr(v).filter(function(x){ return x != null && String(x).trim() !== ""; }).map(String); }
+function renderAplica(c){
+  var a = strs(c.areas_aplica);
+  if (!a.length) return null;
+  return h("div", {class:"aplica"}, h("span", {text:"Aplica a:"}), a.map(function(x){ return h("span", {class:"achip", text: x}); }));
+}
 function renderCitas(citas){
   citas = arr(citas); if (!citas.length) return null;
   return [h("h3", {class:"sec", text:"Citas verificadas"}),
@@ -320,7 +331,9 @@ function renderCitas(citas){
         h("div", {class:"hd"}, s(c.nombre_norma || c.doc_id), " ",
           h("small", {text: [c.doc_id && c.nombre_norma ? c.doc_id : null, c.articulo ? "Art. " + c.articulo : null, c.version ? "v" + c.version : null].filter(Boolean).join(" · ")}), " ",
           estadoBadge(c.estado)),
-        c.texto ? h("q", {text: c.texto}) : null);
+        c.texto ? h("q", {text: c.texto}) : null,
+        renderAplica(c),
+        c.nota_area ? h("div", {class:"nota-area", text: s(c.nota_area)}) : null);
     }))];
 }
 function renderWarns(w){
@@ -363,6 +376,8 @@ function renderDictamen(d){
   if (conf.length) add(body, [h("h3", {class:"sec", text:"Conflictos normativos"}), conf.map(function(x){ return h("div", {class:"box conf", text: x}); })]);
   var vac = arr(d.vacios);
   if (vac.length) add(body, [h("h3", {class:"sec", text:"Vacíos normativos"}), vac.map(function(x){ return h("div", {class:"box vac", text: x}); })]);
+  var coord = strs(d.areas_a_coordinar);
+  if (coord.length) add(body, [h("h3", {class:"sec", text:"Áreas a coordinar"}), h("div", {class:"coord"}, coord.map(function(x){ return h("span", {class:"achip", text: x}); }))]);
   var acc = arr(d.acciones);
   if (acc.length) add(body, [h("h3", {class:"sec", text:"Acciones recomendadas"}), h("ol", {class:"lst"}, acc.map(function(x){ return h("li", {text: x}); }))]);
   return h("div", {class:"dict"}, banner, body);
@@ -592,7 +607,7 @@ function openTrace(runId){
 }
 
 fetch("/auth/me", {credentials: "same-origin"}).then(function(r){ return r.json(); }).then(function(me){
-  if (me && me.usuario) $("who").textContent = me.usuario + (me.rol === "admin" ? " · administrador" : " · empleado");
+  if (me && me.usuario) $("who").textContent = me.usuario + (me.area ? " · " + me.area : (me.rol === "admin" ? " · administrador" : " · empleado"));
   if (me && me.rol === "admin") $("adminlink").hidden = false;
 }).catch(function(){});
 cargarHistorial();

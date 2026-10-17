@@ -46,6 +46,41 @@ def api(method: str, path: str, **kw):
         return None, f"{type(e).__name__}: {e}"
 
 
+AREAS_DEFAULT = ["Riesgos", "Créditos", "Agencias", "Cumplimiento", "Marketing", "Cobranzas", "Call Center",
+                 "Operaciones", "Auditoría", "Legal", "Contabilidad", "Archivo", "RRHH"]
+
+
+def areas_lista() -> list[str]:
+    """Lista cerrada de áreas desde GET /api/areas (cacheada en sesión); si falla, la constante local."""
+    cache = st.session_state.get("_areas_cache")
+    if isinstance(cache, list) and cache:
+        return cache
+    r, e = api("GET", "/areas", timeout=10)
+    if not e and isinstance(r, list) and r and all(isinstance(x, str) for x in r):
+        st.session_state["_areas_cache"] = r
+        return r
+    return list(AREAS_DEFAULT)
+
+
+def areas_de(x) -> list[str]:
+    """areas_aplica puede llegar como lista, string JSON, string separado por comas o None."""
+    if isinstance(x, str):
+        s = x.strip()
+        if not s:
+            return []
+        if s.startswith("["):
+            try:
+                import json
+                x = json.loads(s)
+            except Exception:
+                x = s.strip("[]").replace('"', "").split(",")
+        else:
+            x = s.split(",")
+    if not isinstance(x, (list, tuple)):
+        return []
+    return [str(a).strip() for a in x if a is not None and str(a).strip()]
+
+
 def badge(estado: str | None) -> str:
     c = COLOR_ESTADO.get(estado or "", "#666")
     return f"<span class='badge' style='background:{c}'>{estado or '?'}</span>"
@@ -69,7 +104,7 @@ def mostrar_respuesta(r: dict) -> None:
 st.title("📚 Normativa Bancaria · Agentes de IA")
 st.caption(f"API: {API}")
 
-tabs = st.tabs(["💬 Consultar", "🧾 Agente 1 · Normas", "🔎 Trazas", "📊 Dashboard", "🎯 KPIs"])
+tabs = st.tabs(["💬 Consultar", "🧾 Agente 1 · Normas", "🔎 Trazas", "📊 Dashboard", "🎯 KPIs", "👥 Usuarios"])
 
 # ------------------------------------------------------------------ Consultar
 with tabs[0]:
@@ -311,6 +346,36 @@ def banner_revision(doc: dict, n_altas: int, kp: str) -> None:
             _decidir(doc.get("doc_id"), "publicar_igual", com)
 
 
+def editor_areas(doc: dict, sel: str) -> None:
+    """Áreas de aplicación del documento: fuente/confianza y edición manual (PUT /documentos/{id}/areas)."""
+    actuales = areas_de(doc.get("areas_aplica"))
+    lista = areas_lista()
+    with st.container(border=True):
+        st.markdown("**🏢 Áreas de aplicación**")
+        fuente, confz = doc.get("areas_fuente"), doc.get("areas_confianza")
+        try:
+            conf_txt = f"{float(confz):.2f}" if confz is not None else "—"
+        except (TypeError, ValueError):
+            conf_txt = md(confz)
+        st.caption(f"Actuales: {md(', '.join(actuales) or '—')} · fuente: {md(fuente or '—')} · "
+                   f"confianza: {conf_txt}")
+        if doc.get("areas_requiere_confirmacion") in (1, True, "1"):
+            st.warning("⚠ Áreas inferidas por IA: confirma o corrige y guarda.")
+        opciones = list(lista) + [a for a in actuales if a not in lista]
+        nuevas = st.multiselect("Áreas a las que aplica la norma", opciones, default=actuales,
+                                key=f"a1_areas_{sel}", placeholder="ninguna")
+        if st.button("Guardar áreas", key=f"a1_areas_btn_{sel}"):
+            r, e = api("PUT", f"/documentos/{sel}/areas", json={"areas": list(nuevas), "usuario": "web:streamlit"})
+            if e:
+                st.error(f"No se pudieron guardar las áreas: {e}")
+            else:
+                r = r if isinstance(r, dict) else {}
+                guardadas = areas_de(r.get("areas_aplica")) or list(nuevas)
+                st.session_state["a1_flash"] = f"Áreas guardadas: {', '.join(guardadas) or '—'}"
+                st.session_state.pop(f"a1_areas_{sel}", None)
+                st.rerun()
+
+
 with tabs[1]:
     st.subheader("🧾 Agente 1 · Ingesta y validación de normas")
     if st.session_state.get("a1_flash"):
@@ -358,12 +423,16 @@ with tabs[1]:
         if not docs:
             st.info("Aún no hay normas registradas." if not err_docs else "Lista no disponible.")
         else:
-            c1, c2 = st.columns([3, 1])
+            c1, c1b, c2 = st.columns([3, 3, 1])
             estados = sorted({str(d.get("estado")) for d in docs if d.get("estado")})
             fest = c1.multiselect("Filtrar por estado", estados, key="a1_fest", placeholder="todos")
+            areas_docs = {a for d in docs for a in areas_de(d.get("areas_aplica"))}
+            opc_areas = list(areas_lista()) + sorted(areas_docs - set(areas_lista()))
+            farea = c1b.multiselect("Filtrar por área", opc_areas, key="a1_farea", placeholder="todas")
             if c2.button("🔄 Actualizar", key="a1_ref"):
                 st.rerun()
-            vis = [d for d in docs if not fest or str(d.get("estado")) in fest]
+            vis = [d for d in docs if (not fest or str(d.get("estado")) in fest)
+                   and (not farea or set(areas_de(d.get("areas_aplica"))) & set(farea))]
             filas = []
             for d in vis:
                 notas = []
@@ -374,6 +443,9 @@ with tabs[1]:
                 filas.append({"código": d.get("codigo") or d.get("doc_id"), "estado": d.get("estado"),
                               "chip": chip_txt(d.get("estado")), "norma": d.get("nombre_norma"),
                               "tipo": d.get("tipo_fuente"), "versión": d.get("version"),
+                              "áreas": (", ".join(areas_de(d.get("areas_aplica"))) or "—") +
+                                       (" ⚠ inferidas por IA, confirmar"
+                                        if d.get("areas_requiere_confirmacion") in (1, True, "1") else ""),
                               "reemplaza a": d.get("reemplaza_a"), "reemplazada por": d.get("reemplazada_por"),
                               "publicado": "✅ sí" if d.get("publicado") in (1, True, "1") else "— no",
                               "notas": ", ".join(notas), "vigencia": d.get("fecha_vigencia"),
@@ -420,6 +492,7 @@ with tabs[1]:
                             (" · requiere confirmación humana" if doc.get("requiere_confirmacion") else ""))
                 if doc.get("estado") == "pendiente_revision":
                     banner_revision(doc, n_altas, kp=f"a1d_{sel}")
+                editor_areas(doc, sel)
 
                 dt = st.tabs(["🗂️ Metadatos", "📌 Afirmaciones", "⚖️ Discrepancias", "🔎 Traza"])
                 with dt[0]:
@@ -670,6 +743,21 @@ def _df(rows, cols: list[str]):
     return df[sel] if sel else df
 
 
+def _barras_area(rows, nombre: str) -> None:
+    """Barras {area, n}; «sin datos» si vacío o con forma inesperada."""
+    dfa = _df(rows, ["area", "n"])
+    if dfa is None or not {"area", "n"} <= set(dfa.columns):
+        st.caption(SD)
+        return
+    dfa = dfa.copy()
+    dfa["area"] = dfa["area"].fillna("sin área").astype(str)
+    dfa["n"] = pd.to_numeric(dfa["n"], errors="coerce").fillna(0)
+    if dfa.empty or not dfa["n"].sum():
+        st.caption(SD)
+        return
+    st.bar_chart(dfa.groupby("area")["n"].sum().rename(nombre))
+
+
 def fetch_kpis(params: dict):
     """GET /api/kpis; devuelve (datos, error). Nunca lanza."""
     return api("GET", "/kpis", params=params, timeout=60)
@@ -790,6 +878,9 @@ with tabs[4]:
             e1 = st.columns(2)
             _tiempos(AGENTE1, e1[0])
             _trazas(AGENTE1, e1[1])
+            with st.container(border=True):
+                st.markdown("**Documentos por área de aplicación**")
+                _barras_area(_g(kp, "por_area", "documentos"), "documentos")
 
         # ================================================================ Agente 2
         with tab2:
@@ -857,6 +948,24 @@ with tabs[4]:
                 else:
                     st.caption(SD)
 
+            st.markdown("#### Por área")
+            pa_cols = st.columns(2)
+            with pa_cols[0].container(border=True):
+                st.markdown("**Consultas por área del usuario**")
+                _barras_area(_g(kp, "por_area", "consultas"), "consultas")
+            with pa_cols[1].container(border=True):
+                st.markdown("**Brechas por área del usuario**")
+                bra = _g(kp, "por_area", "brechas", default=[])
+                _barras_area(bra, "brechas")
+                bra = [x for x in bra if isinstance(x, dict) and x.get("ejemplos")] if isinstance(bra, list) else []
+                if bra:
+                    with st.expander("Ejemplos por área"):
+                        for x in bra:
+                            st.markdown(f"**{md(x.get('area') or 'sin área')}** · {md(x.get('n', 0))}")
+                            ejs = x.get("ejemplos")
+                            for ej in (ejs if isinstance(ejs, list) else [ejs])[:3]:
+                                st.caption(f"• {md(ej)}")
+
             st.markdown(f"#### Tendencia de consultas ({_g(tend, 'granularidad', default=gran)})")
             dfc = _df(_g(tend, "consultas"), ["t", "n", "sin_cobertura"])
             ycols = [x for x in ["n", "sin_cobertura"] if dfc is not None and x in dfc.columns]
@@ -891,3 +1000,40 @@ with tabs[4]:
                 "con conteo y ejemplos.")
     except Exception as e:  # nunca romper la pestaña ante una forma inesperada
         st.warning(f"Los KPIs llegaron con un formato inesperado: {type(e).__name__}: {e}")
+
+
+# ------------------------------------------------------------------ Usuarios
+with tabs[5]:
+    st.subheader("👥 Usuarios y áreas")
+    if st.session_state.get("u_flash"):
+        st.success(st.session_state.pop("u_flash"))
+    us, e_us = api("GET", "/usuarios")
+    if e_us:
+        st.warning(f"El servicio de usuarios no está disponible: {e_us}")
+    else:
+        dfu = _df(us if isinstance(us, list) else [], ["usuario", "rol", "area", "created_at"])
+        if dfu is None:
+            st.info("Aún no hay usuarios registrados.")
+        else:
+            dfu = dfu.rename(columns={"area": "área", "created_at": "creado"})
+            st.dataframe(dfu, width="stretch", hide_index=True)
+
+    st.markdown("#### Crear usuario")
+    with st.form("u_form", clear_on_submit=False):
+        f1, f2 = st.columns(2)
+        nu = f1.text_input("Usuario", key="u_usuario")
+        nc = f2.text_input("Clave", type="password", key="u_clave")
+        f3, f4 = st.columns(2)
+        nr = f3.selectbox("Rol", ["empleado", "admin"], key="u_rol")
+        na = f4.selectbox("Área", areas_lista(), key="u_area")
+        enviar_u = st.form_submit_button("Crear usuario", type="primary")
+    if enviar_u:
+        if not (nu or "").strip() or not nc:
+            st.error("Usuario y clave son obligatorios.")
+        else:
+            r, e = api("POST", "/usuarios", json={"usuario": nu.strip(), "clave": nc, "rol": nr, "area": na})
+            if e:
+                st.error(f"No se pudo crear el usuario: {e}")
+            else:
+                st.session_state["u_flash"] = f"Usuario '{nu.strip()}' creado ({nr} · {na})."
+                st.rerun()
