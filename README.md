@@ -1,186 +1,142 @@
-# Hack AI Agents — Agentes de IA con control humano
+# Normativa Bancaria · Agentes de IA
 
-Proyecto para el hackathon **"Hack AI Agents Impact"** (NTT DATA x Sundai LATAM).
-Sistema multi-agente (FastAPI + DeepSeek) que analiza casos operativos, consulta datos, ejecuta
-acciones con reglas de negocio y pide **aprobación humana** para las acciones sensibles, dejando
-una **traza completa** de cada paso.
+Proyecto para el hackathon **"Hack AI Agents Impact"** (NTT DATA x Sundai LATAM, Perú Tech Week).
+**Caso B2 – Banca: normativa y políticas internas.**
 
-> Sector: _[completar: Banca / Minería / Manufactura]_
+Demo: **http://169.58.187.13/chat** (chat de casos) · **http://169.58.187.13** (panel de administración)
 
 ## Problema
 
-_[Completar el día del evento: quién tiene el problema, qué proceso es lento, caro o propenso a errores, y cuánto cuesta hoy.]_
+En un banco conviven reglamentos de la SBS, políticas internas, manuales y circulares, con varias versiones
+de cada uno. Encontrar la norma correcta y **vigente** para una operación concreta es lento, y dos personas
+pueden llegar a conclusiones distintas: una cita la versión reemplazada, otra no ve que el manual de agencias
+contradice la política de crédito. El resultado son aprobaciones fuera de política, reprocesos y riesgo
+regulatorio.
 
 ## Solución
 
-Un equipo de agentes de IA con roles distintos que resuelve el caso de punta a punta:
+Un equipo de agentes de IA que trabaja sobre el corpus normativo del banco:
 
-- **Analiza** la solicitud y consulta los datos necesarios mediante herramientas (tools).
-- **Decide** qué acciones corresponden y **traspasa** el trabajo al agente que las ejecuta.
-- **Respeta reglas** (montos máximos, acciones prohibidas, validaciones de negocio) antes de ejecutar.
-- **Pide aprobación humana** para acciones sensibles: nada crítico se ejecuta sin una persona.
-- **Deja trazabilidad**: cada razonamiento, tool, resultado y decisión queda registrado y visible.
+1. **Agente de ingesta** — recibe una norma (PDF, DOCX o TXT), extrae sus metadatos (entidad, fechas de
+   emisión y vigencia, versión, a qué norma reemplaza), la divide por artículo y la indexa en Pinecone.
+   Marca de forma determinista las versiones reemplazadas.
+2. **Agente validador** — compara los artículos nuevos con cifras, plazos o montos contra los más parecidos
+   de otras normas y registra **contradicciones** y **actualizaciones**, con la cita literal de ambos lados.
+   Un humano confirma o descarta cada discrepancia.
+3. **Agente analista de casos** — el empleado describe o sube un caso real (una solicitud de crédito, una
+   operación). El agente extrae los hechos, busca todas las reglas vigentes aplicables, las evalúa una por una
+   con cálculos explícitos, revisa conflictos y versiones anteriores, señala los **vacíos normativos** y emite
+   un **dictamen**: procede, procede con observaciones, no procede o requiere escalamiento.
+4. **Agente de consultas** — responde preguntas cortas citando documento, artículo, versión y estado, y dice
+   explícitamente cuando no encuentra una norma que lo respalde.
+
+**No inventa:** cada cita se verifica en código contra el texto del fragmento recuperado. Si la cita no es
+literal, se descarta. Si no hay respaldo, la respuesta es "No encontré una norma vigente que respalde esta
+respuesta" y la pregunta queda registrada como tema sin cobertura en el dashboard.
+
+**Trazabilidad:** cada ejecución guarda entrada, pasos de razonamiento, herramientas usadas, fragmentos
+recuperados con su ID y score, modelo, latencia, usuario y salida. Se ve desde el chat ("Ver razonamiento del
+agente") y desde el panel.
 
 ## Arquitectura
 
 ```mermaid
 flowchart LR
-    U[Usuario / Supervisor] -->|lanza caso, aprueba o rechaza| UI[Interfaz web]
-    UI <-->|API JSON| API[FastAPI]
-    API --> ENG[Orquestador<br/>Engine + Flow]
-    ENG -->|AgentTransport<br/>local · NANDA futuro| A1[Agente 1<br/>ej. analista]
-    ENG --> A2[Agente 2<br/>ej. ejecutor]
-    A1 -. handoff .-> A2
-    A1 & A2 -->|chat + tool calling| LLM[(DeepSeek<br/>llm_client.py)]
-    A1 & A2 --> G{Guardrails}
-    G -->|permitida| T[Tools del sector<br/>datos sintéticos]
-    G -->|sensible| AP[Aprobación humana<br/>pendiente]
-    G -->|bloqueada| X[Rechazo por política]
-    AP -->|aprobada| T
-    ENG --> TR[(Traza<br/>runs/*.json)]
+  CH[Chat de casos<br/>/chat] -->|POST /api/chat| API
+  ST[Panel Streamlit<br/>normas · discrepancias · trazas · dashboard] -->|REST| API
+  subgraph FastAPI
+    API[API]
+    IN[Agente ingesta]
+    VA[Agente validador]
+    AC[Agente analista de casos]
+    CO[Agente consultas]
+  end
+  API --> IN -->|al indexar| VA
+  API --> AC
+  API --> CO
+  IN & VA & AC & CO --> LLM[(LLM<br/>llm_client.py)]
+  IN -->|upsert_records| PC[(Pinecone<br/>llama-text-embed-v2<br/>+ bge-reranker-v2-m3)]
+  VA & AC & CO -->|search + rerank| PC
+  IN & VA & AC & CO --> DB[(SQLite<br/>documentos · chunks · discrepancias<br/>consultas · trazas · chat)]
 ```
 
-Despliegue: `Internet → Caddy (:80/:443) → app FastAPI (:8000)` con Docker Compose.
+Despliegue: `Internet → Caddy (:80) → /api, /chat → FastAPI · resto → Streamlit`, con Docker Compose en un VPS.
+
+- **Vector store:** Pinecone serverless, un índice con embeddings integrados (`llama-text-embed-v2`,
+  1024 dimensiones, coseno) y reranking multilingüe (`bge-reranker-v2-m3`). Namespaces por entorno
+  (`demo`, `dev`). Metadatos por fragmento: `doc_id, nombre_norma, entidad, tipo, tema, articulo, pagina,
+  fecha_emision, fecha_vigencia, estado, version, reemplaza_a`. Sin clave, un índice local de respaldo.
+- **Base relacional:** SQLite. Es la fuente de verdad del estado de cada norma; Pinecone sirve para recuperar.
+- **LLM:** un solo módulo (`app/llm_client.py`). `LLM_PROVIDER=deepseek` (por defecto) o `anthropic`.
 
 ### Estructura
 
 ```
 app/
-  main.py            FastAPI: /, /health, /api/*
-  api.py             API JSON (lanzar casos, ver trazas, aprobar/rechazar)
-  llm_client.py      ÚNICO acceso al LLM (DeepSeek, SDK openai) — reintentos, timeouts, JSON tolerante
-  agents/
-    agent.py         Agent (config) + AgentSession (loop con tool use, reanudable)
-    flow.py          Flow: agentes + reglas de traspaso (secuencial / condicional)
-    engine.py        Orquestador: estado compartido, handoffs, aprobaciones, hilos
-    tools.py         Registro de tools con decorador @tool
-    guardrails.py    Reglas antes de ejecutar cada tool
-    transport.py     AgentTransport (punto de extensión para NANDA)
-    trace.py         Run / Step / Approval + persistencia en runs/
-  static/index.html  Interfaz de demo (HTML + JS, sin dependencias externas)
-sectors/
-  ui_base.json       Textos comunes de la interfaz
-  generico|banca|mineria|manufactura/
-    __init__.py      Agentes, FLOW y CASO_EJEMPLO
-    tools.py         Tools y validadores del sector
-    guardrails.json  Reglas
-    ui.json          Textos de la interfaz del sector
-    data/*.json      Datos sintéticos
-scripts/
-  smoke_llm.py       Prueba del LLM (simple, tool calling, thinking on/off)
-  run_example.py     Caso de ejemplo completo por consola
-  verify_remote.py   Verificación de un despliegue desde fuera
-caddy/               Configuración HTTPS (sslip.io) y plan B HTTP
-deploy.sh            Despliegue repetible en el VPS
+  main.py               FastAPI: /, /chat, /health, /api/*
+  llm_client.py         Único acceso al LLM (reintentos, timeouts, JSON tolerante)
+  agents/               Framework de agentes: loop con tool calling, flujos, handoff, guardrails, traza
+  normas/
+    db.py               Esquema SQLite y helpers
+    vector.py           Pinecone (embeddings + rerank) o índice local de respaldo
+    parsing.py          Texto desde PDF / DOCX / TXT, detección de texto basura
+    chunking.py         División por artículo
+    ingesta.py          Pipeline de ingesta y vigencia
+    validacion.py       Agente validador de discrepancias
+    consultas.py        Agente de consultas con verificación de citas y confianza
+    casos.py            Agente analista de casos y dictamen
+    api_*.py            Endpoints (contrato en docs/CONTRATOS.md)
+  static/chat.html      Interfaz del chat de casos
+ui/streamlit_app.py     Panel de administración
+corpus/                 Normas de demo (sintéticas y de ejemplo estilo SBS) y casos de ejemplo
+scripts/seed_corpus.py  Carga del corpus de demo
 ```
 
 ## Cómo correrlo
 
 ```bash
-cp .env.example .env          # completar DEEPSEEK_API_KEY y elegir SECTOR
-```
-
-**Local (Python):**
-```bash
-python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+cp .env.example .env     # DEEPSEEK_API_KEY (o ANTHROPIC_API_KEY + LLM_PROVIDER=anthropic), PINECONE_API_KEY
+python -m venv .venv && .venv/Scripts/activate      # Linux/Mac: source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload                         # http://127.0.0.1:8000
+python scripts/seed_corpus.py --reset               # carga SINT-01, SINT-02, SBS-EJ-01, SBS-EJ-02
+uvicorn app.main:app                                 # http://127.0.0.1:8000/chat
+streamlit run ui/streamlit_app.py                    # http://127.0.0.1:8501 (panel)
 ```
 
-**Docker:**
-```bash
-docker compose up --build -d                          # app en 127.0.0.1:8000, Caddy en 80/443
-```
+**Docker / VPS:** `docker compose up --build -d` y luego
+`docker compose exec app python scripts/seed_corpus.py --reset`. Redesplegar:
+`git push vps main && ssh root@<IP> 'cd ~/hacktaton && ./deploy.sh'`.
 
-**Pruebas rápidas:**
-```bash
-python scripts/smoke_llm.py                 # el LLM responde y hace tool calling
-python scripts/run_example.py               # caso de ejemplo completo (aprueba automáticamente)
-python scripts/run_example.py --rechazar    # mismo caso, rechazando la acción sensible
-SECTOR=banca python scripts/run_example.py  # probar otro pack
-```
+## Corpus y casos de demo
 
-**Despliegue:** ver [DEPLOY.md](DEPLOY.md). Redesplegar:
-`git push vps main && ssh root@<IP> 'cd ~/hacktaton && ./deploy.sh'`
-
-### Configuración (.env)
-
-| Variable | Uso |
+| Documento | Contenido clave |
 |---|---|
-| `DEEPSEEK_API_KEY` | Clave de DeepSeek (nunca se sube al repo ni a la imagen) |
-| `DEEPSEEK_MODEL` | `deepseek-flash` (por defecto) o `deepseek-v4-pro` |
-| `SECTOR` | `generico` · `banca` · `mineria` · `manufactura` |
-| `LLM_THINKING` | `false` por defecto; se puede activar por agente |
-| `LLM_TIMEOUT`, `LLM_MAX_RETRIES` | Robustez del cliente LLM |
-| `APP_HOST`, `CADDY_MODE` | Despliegue: host sslip.io y modo `https` / `http` |
+| SINT-01 Política de Crédito de Consumo v1 | Reemplazada. Endeudamiento 40 %, scoring 600. |
+| SINT-02 Política de Crédito de Consumo v2 | Vigente desde 2025-03-01. Endeudamiento 35 %, scoring 620, gerente de agencia hasta S/ 50,000. |
+| SINT-03 Manual de Procedimientos de Agencias | Gerente de agencia hasta S/ 80,000: contradice SINT-02 Art. 8. Se sube en vivo. |
+| SBS-EJ-01, SBS-EJ-02 | Documentos de ejemplo de estilo SBS (transparencia y reclamos, riesgo operacional). No son normas reales. |
+| CASO-01 | Crédito de S/ 70,000 con endeudamiento de 50.8 % y scoring 610: no procede. |
+| CASO-02 | Crédito que cumple todas las reglas: procede. |
+| CASO-03 | Cliente no domiciliado con garantía en criptoactivos: vacío normativo, requiere escalamiento. |
 
-## Cómo agregar una tool
-
-En `sectors/<sector>/tools.py`:
-
-```python
-@tool(description="Consulta el stock de un producto.",
-      params={"sku": "Código del producto"},
-      sensitive=False)                 # True -> requiere aprobación humana
-def consultar_stock(sku: str) -> dict:
-    return {"sku": sku, "stock": 120}
-```
-
-El esquema JSON se genera desde la firma (tipos `str`, `int`, `float`, `bool`). Luego agrega el
-nombre a la lista `tools=[...]` del agente que la usará y su etiqueta en `ui.json` (`tool_names`).
-
-**Validación de negocio previa** (bloquea si devuelve un mensaje):
-
-```python
-@validator("crear_orden")
-def entidad_activa(args: dict) -> str | None:
-    return None if ENTIDADES[args["entidad_id"]]["estado"] == "activo" else "Entidad no activa"
-```
-
-**Reglas sin código** en `sectors/<sector>/guardrails.json`:
-
-```json
-{
-  "blocked_tools": ["eliminar_cliente"],
-  "max_values": {"monto": 50000},
-  "approval_thresholds": {"monto": 10000},
-  "require_approval_tools": ["enviar_notificacion"]
-}
-```
-
-## Cómo agregar agentes y flujos
-
-En `sectors/<sector>/__init__.py`:
-
-```python
-analista = Agent(name="analista", role="Analizas ... y traspasas al ejecutor ...",
-                 tools=["consultar_x"], handoffs=["ejecutor"])          # handoff decidido por el LLM
-ejecutor = Agent(name="ejecutor", role="Ejecutas ...", tools=["crear_y"],
-                 thinking=True)                                         # thinking solo en este agente
-auditor  = Agent(name="auditor", role="Revisas lo ejecutado ...")
-
-FLOW = Flow(
-    agents=[analista, ejecutor, auditor],
-    start="analista",
-    next={"ejecutor": "auditor"},                                       # secuencial
-    # next={"ejecutor": lambda state: "auditor" if "monto" in state["outputs"]["ejecutor"] else None},
-)
-```
-
-- **Handoff condicional (LLM):** un agente con `handoffs=[...]` recibe la tool `transferir_a` y decide él mismo traspasar.
-- **Secuencial / condicional por regla:** `next` con un nombre o una función sobre el estado compartido.
-- **Estado compartido:** `run.state` guarda la solicitud original y la salida de cada agente; el siguiente agente la recibe.
-- **NANDA:** implementar `AgentTransport.deliver()` (ver `app/agents/transport.py`) y pasar `Engine(transport=...)`.
-
-## API
+## API principal
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/health` | Estado, sector y modelo |
-| GET | `/api/ui` | Textos de la interfaz + caso de ejemplo |
-| POST | `/api/runs` | Lanza un caso `{"input": "..."}` (vacío = ejemplo) |
-| GET | `/api/runs/{id}` | Traza, aprobaciones, estado y resultado |
-| POST | `/api/approvals/{id}` | `{"approved": true, "comment": "..."}` |
+| POST | `/api/chat` | Caso o consulta (multipart: `session_id`, `mensaje`, `archivo?`) → dictamen |
+| POST | `/api/documentos` | Sube una norma → ingesta + validación |
+| GET | `/api/discrepancias` | Contradicciones y actualizaciones detectadas |
+| POST | `/api/consultas` | Consulta corta con citas |
+| GET | `/api/trazas/{run_id}` | Traza completa de una ejecución |
+| GET | `/api/dashboard` | Normas más consultadas, temas sin cobertura, discrepancias, uso |
+
+Contratos completos en [docs/CONTRATOS.md](docs/CONTRATOS.md).
+
+## Extensión: NANDA
+
+El trabajo entre agentes viaja por `AgentTransport` (`app/agents/transport.py`). Conectar agentes externos vía
+NANDA es implementar `deliver()` y pasar `Engine(transport=...)`, sin tocar agentes ni herramientas. No está
+implementado.
 
 ## Código
 
