@@ -138,3 +138,22 @@ Cada porcentaje trae `num` y `den` para poder explicar de dónde sale.
   }
 }
 ```
+
+## Áreas de aplicación y usuarios por área
+Lista cerrada (`app/normas/areas.py: AREAS`): Riesgos, Créditos, Agencias, Cumplimiento, Marketing, Cobranzas,
+Call Center, Operaciones, Auditoría, Legal, Contabilidad, Archivo, RRHH.
+
+- Documentos (`GET /api/documentos`, `GET /api/documentos/{doc_id}`) agregan: `areas_aplica: [str]`,
+  `areas_fuente: ficha|frontmatter|llm|manual`, `areas_confianza: float|null`, `areas_requiere_confirmacion: 0|1`.
+  Chunks en Pinecone: metadato `areas_aplica` (lista, filtrable con `$in`).
+- `GET /api/areas` -> `[str]` (lista cerrada).
+- `PUT /api/documentos/{doc_id}/areas` `{areas: [str], usuario}` -> `{ok, areas_aplica}` (actualiza BD + Pinecone,
+  `areas_fuente=manual`, `areas_requiere_confirmacion=0`, paso `edicion_areas` en trazas_ingesta).
+- `GET /api/usuarios` -> `[{usuario, rol: admin|empleado, area, created_at}]`;
+  `POST /api/usuarios` `{usuario, clave, rol, area}` -> `{ok}` (400 si el área no está en la lista o el usuario existe).
+- `GET /auth/me` -> `{usuario, rol, area}`; `/auth/check` agrega el header `X-Area`.
+- `POST /api/chat`: cada cita agrega `areas_aplica: [str]` y `nota_area: str|null`
+  ("Esta norma no es de tu área (<area>), pero te aplica." cuando el área del usuario no está en la norma);
+  respuesta agrega `area_usuario`; `dictamen.areas_a_coordinar: [str]` (unión de áreas de las normas citadas).
+- `GET /api/kpis` agrega `por_area: {consultas: [{area, n}], brechas: [{area, n, ejemplos}], documentos: [{area, n}]}`
+  (consultas y brechas por área del USUARIO que preguntó; documentos por área de aplicación de la norma).
