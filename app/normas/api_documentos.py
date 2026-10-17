@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Form, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -51,8 +51,15 @@ def _doc(doc_id: str, cols: str = COLS_DOC) -> dict:
 
 
 @router.post("/documentos", status_code=202)
-async def subir_documento(archivo: UploadFile = File(...)) -> JSONResponse:
+async def subir_documento(archivo: UploadFile = File(...), areas: str = Form("")) -> JSONResponse:
+    """`areas` (opcional, separadas por coma): áreas elegidas por el usuario al cargar; prevalecen sobre la ficha y el LLM."""
     original = Path(archivo.filename or "documento.txt").name
+    areas_usuario: list[str] = []
+    if areas.strip():
+        from app.normas import areas as areas_mod
+        areas_usuario, descartadas = areas_mod.normalizar_con_descartes(areas)
+        if descartadas:
+            raise HTTPException(400, f"Áreas no válidas: {descartadas}. Válidas: {areas_mod.AREAS}")
     if es_archivo_prohibido(original):
         raise HTTPException(400, f"'{original}' es material interno (00_GUIA / NO_SUBIR) y no se puede indexar")
     if Path(original).suffix.lower() not in EXTENSIONES:
@@ -76,6 +83,8 @@ async def subir_documento(archivo: UploadFile = File(...)) -> JSONResponse:
         return JSONResponse({"doc_id": ctx["doc_id"], "codigo": ctx.get("codigo"),
                              "estado_ingesta": ctx["estado_ingesta"], "duplicado": True,
                              "mensaje": ctx.get("mensaje")}, status_code=202)
+    if areas_usuario:
+        ctx["areas_usuario"] = areas_usuario
     threading.Thread(target=procesar, args=(ctx,), kwargs={"canal": "web"}, name=f"ingesta-{ctx['doc_id']}",
                      daemon=True).start()
     return JSONResponse({"doc_id": ctx["doc_id"], "codigo": ctx.get("codigo"), "estado_ingesta": "procesando",

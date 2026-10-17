@@ -543,8 +543,12 @@ def _procesar(ctx: dict[str, Any], validar: bool, canal: str) -> dict[str, Any]:
         r["fuente"]["reemplaza_a"] = "clausula_derogacion"
         r["confianza"]["reemplaza_a"] = 1.0
     tipo_fuente = tipo_fuente_de(meta["entidad"])
-    ar = resolver_areas(ctx.get("frontmatter") or {}, ctx.get("fm_origen"), texto, meta["nombre"] or ctx.get("nombre"),
-                        doc_id, usuario)
+    if ctx.get("areas_usuario"):  # elegidas por el usuario al cargar: prevalecen, sin consultar al LLM
+        ar = {"areas_aplica": ctx["areas_usuario"], "areas_fuente": "manual", "areas_confianza": 1.0,
+              "areas_requiere_confirmacion": 0, "declarado": ctx["areas_usuario"], "descartadas": [], "llm": None}
+    else:
+        ar = resolver_areas(ctx.get("frontmatter") or {}, ctx.get("fm_origen"), texto,
+                            meta["nombre"] or ctx.get("nombre"), doc_id, usuario)
     md = {"campos": meta, "fuente": r["fuente"], "origen": r["origen"], "faltantes": r["faltantes"],
           "baja_confianza": r["baja_confianza"], "advertencias": r["advertencias"], "deroga": deroga,
           "archivo": ctx.get("nombre")}

@@ -306,11 +306,13 @@ def _pasos_txt(etapa: str | None) -> str:
     return "  ›  ".join(partes)
 
 
-def _subir_y_seguir(nombre: str, contenido: bytes, timeout_s: float = 180, intervalo: float = 1.5) -> dict:
+def _subir_y_seguir(nombre: str, contenido: bytes, timeout_s: float = 180, intervalo: float = 1.5,
+                    areas: list[str] | None = None) -> dict:
     """POST del archivo y sondeo de /progreso con estado visual. Devuelve un resumen; nunca lanza."""
     res = {"archivo": nombre, "doc_id": None, "resultado": "error", "mensaje": ""}
     with st.status(f"{nombre} · enviando…", expanded=True) as stt:
-        r, err = api("POST", "/documentos", files={"archivo": (nombre, contenido)}, timeout=180)
+        r, err = api("POST", "/documentos", files={"archivo": (nombre, contenido)},
+                     data={"areas": ", ".join(areas)} if areas else None, timeout=180)
         if err:
             res["mensaje"] = err
             stt.update(label=f"{nombre} · rechazado", state="error")
@@ -529,11 +531,17 @@ with tabs[1]:
     with sub[0]:
         archivos = st.file_uploader("PDF, DOCX, TXT o MD (uno o varios)", type=["pdf", "docx", "txt", "md"],
                                     accept_multiple_files=True, key="a1_upl")
+        areas_carga = st.multiselect(
+            "Áreas de aplicación (opcional)", areas_lista(), key="a1_areas_carga",
+            help="Se aplican a todos los archivos de esta carga y prevalecen sobre la ficha. "
+                 "Si lo dejas vacío, se usan las áreas de la ficha del documento o las infiere la IA (para confirmar).")
         if archivos and st.button(f"Subir e indexar ({len(archivos)})", type="primary", key="a1_subir"):
             st.session_state["a1_cola"] = [(a.name, a.getvalue()) for a in archivos]
+            st.session_state["a1_cola_areas"] = list(areas_carga)
         cola = st.session_state.pop("a1_cola", None)
         if cola:
-            resultados = [_subir_y_seguir(n, c) for n, c in cola]
+            areas_cola = st.session_state.pop("a1_cola_areas", None) or None
+            resultados = [_subir_y_seguir(n, c, areas=areas_cola) for n, c in cola]
             st.session_state["a1_resultados"] = resultados
         elif st.session_state.get("a1_resultados"):
             st.markdown("**Última carga**")
