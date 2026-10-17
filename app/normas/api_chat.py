@@ -1,41 +1,58 @@
-"""Endpoints del chat de casos (frente C, backend). MOCK: reemplazar por la implementación real.
+"""Endpoints del chat de casos (frente C, backend).
 
 Contrato en docs/CONTRATOS.md (sección Chat de casos).
 """
-from fastapi import APIRouter, File, Form, UploadFile
+from __future__ import annotations
+
+import re
+import time
+from pathlib import Path
+
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
+
+from app.normas import db
 
 router = APIRouter(tags=["chat"])
 
+UPLOADS = db.ROOT / "data" / "uploads" / "casos"
+CASOS_DIR = db.ROOT / "corpus" / "casos"
+EXT_OK = {".pdf", ".docx", ".txt", ".md"}
+MAX_BYTES = 10 * 1024 * 1024
+
 
 @router.post("/chat")
-async def chat(session_id: str = Form(...), mensaje: str = Form(""), archivo: UploadFile | None = File(None)) -> dict:
-    return {
-        "session_id": session_id, "run_id": "mock", "tipo": "caso", "latencia_ms": 0,
-        "respuesta": "(mock) El caso no procede: incumple el límite de endeudamiento.",
-        "confianza": "media", "citas": [], "advertencias": [],
-        "dictamen": {
-            "resumen_caso": "Solicitud de crédito de consumo por S/ 70,000 aprobada por gerente de agencia.",
-            "hechos": [{"dato": "Ingreso neto mensual", "valor": "S/ 6,000"}],
-            "evaluaciones": [{
-                "regla": "Endeudamiento máximo 35% del ingreso neto", "doc_id": "SINT-02",
-                "nombre_norma": "Política de Crédito de Consumo", "articulo": "5", "version": "2",
-                "estado": "vigente", "cita": "no podrá superar el 35% de su ingreso neto mensual",
-                "resultado": "no_cumple", "explicacion": "(900 + 2,150) / 6,000 = 50.8% > 35%",
-            }],
-            "calculos": [{"descripcion": "Ratio de endeudamiento", "expresion": "(900+2150)/6000", "resultado": 0.508}],
-            "conflictos": ["SINT-02 Art. 8 (S/ 50,000) contradice SINT-03 Art. 12 (S/ 80,000)"],
-            "vacios": [],
-            "conclusion": "no_procede",
-            "acciones": ["Rechazar o reestructurar el monto", "Escalar el conflicto de autonomías a Cumplimiento"],
-        },
-    }
+async def chat(session_id: str = Form(...), mensaje: str = Form(""),
+               archivo: UploadFile | None = File(None)) -> dict:
+    from app.normas.casos import chat as chat_casos  # import diferido: registra las tools al usarse
+    ruta: Path | None = None
+    if archivo is not None and archivo.filename:
+        ext = Path(archivo.filename).suffix.lower()
+        if ext not in EXT_OK:
+            raise HTTPException(400, f"Formato no soportado: {ext} (usa PDF, DOCX o TXT)")
+        contenido = await archivo.read()
+        if len(contenido) > MAX_BYTES:
+            raise HTTPException(413, "Archivo demasiado grande (máx. 10 MB)")
+        UPLOADS.mkdir(parents=True, exist_ok=True)
+        nombre = re.sub(r"[^A-Za-z0-9._-]", "_", Path(archivo.filename).name)[-80:]
+        ruta = UPLOADS / f"{int(time.time() * 1000)}_{nombre}"
+        ruta.write_bytes(contenido)
+    if not (mensaje or "").strip() and ruta is None:
+        raise HTTPException(400, "Envía un mensaje o un archivo")
+    return await run_in_threadpool(chat_casos, session_id, mensaje, ruta)
 
 
 @router.get("/chat/ejemplos")
 def ejemplos() -> list[dict]:
-    return [{"id": "CASO-01", "titulo": "Crédito de consumo S/ 70,000 (mock)", "texto": "..."}]
+    out = []
+    for p in sorted(CASOS_DIR.glob("*.txt")):
+        texto = p.read_text(encoding="utf-8").strip()
+        titulo = texto.splitlines()[0].strip() if texto else p.stem
+        out.append({"id": p.stem, "titulo": titulo, "texto": texto})
+    return out
 
 
 @router.get("/chat/{session_id}")
 def historial(session_id: str) -> list[dict]:
-    return []
+    from app.normas.casos import historial as hist
+    return hist(session_id)
