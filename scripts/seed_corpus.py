@@ -38,20 +38,28 @@ COD_2024 = "RES-SINT-2024-001"
 
 
 def codigo_de(path: Path) -> str | None:
-    fm, _ = separar_frontmatter(path.read_text(encoding="utf-8-sig", errors="replace"))
+    if path.suffix.lower() == ".pdf":
+        from app.normas.parsing import parsear
+        texto = "\n".join(t for _, t in parsear(path)[0])
+    else:
+        texto = path.read_text(encoding="utf-8-sig", errors="replace")
+    fm, _ = separar_frontmatter(texto)
     return (fm.get("codigo") or "").strip() or None
 
 
 def archivos_demo() -> dict[str, Path]:
     """prefijo ('02') o código -> archivo. Excluye la guía."""
     out: dict[str, Path] = {}
-    for p in sorted(DEMO.glob("*.md")):
+    # .md primero; un .pdf solo cubre lo que no tenga su .md (p. ej. RES-SINT-2024-001)
+    for p in sorted(DEMO.glob("*.md")) + sorted(DEMO.glob("*.pdf")):
         if es_archivo_prohibido(p.name):
             continue
         pref = p.name.split("_", 1)[0]
+        cod = codigo_de(p)
+        if (pref.isdigit() and pref in out) or (cod and cod in out):
+            continue
         if pref.isdigit():
             out[pref] = p
-        cod = codigo_de(p)
         if cod:
             out[cod] = p
     return out

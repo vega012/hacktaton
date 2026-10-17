@@ -18,11 +18,56 @@ DISP_RE = re.compile(r"^[ \t]*(?:#{1,6}[ \t]*)?(?:\*\*)?[ \t]*Disposici[oó]n(?:
 FM_RE = re.compile(r"\A﻿?\s*---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
 
 
+# Ficha de metadatos de los PDF/DOCX: etiqueta en una línea y valor en la(s) siguiente(s)
+FICHA = {"código": "codigo", "codigo": "codigo", "entidad emisora": "entidad_emisora",
+         "fecha de emisión": "fecha_emision", "fecha de emision": "fecha_emision",
+         "fecha de vigencia": "fecha_vigencia", "estado": "estado", "versión": "version", "version": "version",
+         "reemplaza a": "reemplaza_a"}
+SIN_VALOR = {"", "ninguna", "ninguno", "no aplica", "n/a", "-", "—"}
+# Encabezado/pie que se repite en cada página del PDF ("RES-SINT-2024-001 — v2.0", "Página 2")
+CABECERA_RE = re.compile(r"^[ 	]*(?:[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+[ 	]+[—-][ 	]+v[\d.]+|P[áa]gina[ 	]+\d+(?:[ 	]+de[ 	]+\d+)?)[ 	]*$",
+                         re.MULTILINE)
+
+
+def limpiar_cabeceras(texto: str) -> str:
+    return CABECERA_RE.sub("", texto or "")
+
+
+def separar_ficha(texto: str) -> tuple[dict[str, str | None], str]:
+    """Ficha 'Código / RES-…', 'Versión / 2.0'… antes del primer artículo -> (dict, cuerpo).
+
+    Solo lee lo declarado en el documento (nada se infiere aquí). Sin ficha reconocible -> ({}, texto).
+    """
+    m_art = ART_RE.search(texto or "")
+    cabeza = texto[: m_art.start()] if m_art else (texto or "")[:3000]
+    lineas = [l.strip() for l in cabeza.splitlines()]
+    idx = [i for i, l in enumerate(lineas) if l.lower() in FICHA]
+    if "codigo" not in {FICHA[lineas[i].lower()] for i in idx}:
+        return {}, texto
+    fm: dict[str, str | None] = {}
+    for n, i in enumerate(idx):
+        fin = idx[n + 1] if n + 1 < len(idx) else len(lineas)
+        valor = []
+        for l in lineas[i + 1: fin]:
+            if not l or l.lower().startswith("aviso"):
+                break
+            valor.append(l)
+        v = " ".join(valor).strip()
+        fm[FICHA[lineas[i].lower()]] = None if v.lower() in SIN_VALOR else v
+    nombre = " ".join(l for l in lineas[: idx[0]] if l).strip()
+    if nombre:
+        fm["nombre_norma"] = nombre
+    return fm, texto[m_art.start():] if m_art else texto
+
+
 def separar_frontmatter(texto: str) -> tuple[dict[str, str | None], str]:
-    """Frontmatter YAML simple (clave: valor) al inicio del texto -> (dict, cuerpo). Valor vacío = None."""
+    """Frontmatter YAML simple (clave: valor) al inicio del texto -> (dict, cuerpo). Valor vacío = None.
+
+    Sin YAML, se intenta la ficha de metadatos de los PDF/DOCX (separar_ficha).
+    """
     m = FM_RE.match(texto or "")
     if not m:
-        return {}, texto
+        return separar_ficha(texto)
     fm: dict[str, str | None] = {}
     for linea in m.group(1).splitlines():
         if ":" not in linea or linea.lstrip().startswith("#"):
@@ -37,7 +82,7 @@ def _pdf(path: Path) -> list[tuple[int, str]]:
     try:
         from pypdf import PdfReader
 
-        pages = [(i + 1, p.extract_text() or "") for i, p in enumerate(PdfReader(str(path)).pages)]
+        pages = [(i + 1, limpiar_cabeceras(p.extract_text() or "")) for i, p in enumerate(PdfReader(str(path)).pages)]
         if sum(len(t.strip()) for _, t in pages) > 50:
             return pages
         log.warning("pypdf extrajo poco texto de %s; se intenta pdfplumber", path.name)
@@ -46,7 +91,7 @@ def _pdf(path: Path) -> list[tuple[int, str]]:
     import pdfplumber
 
     with pdfplumber.open(str(path)) as pdf:
-        return [(i + 1, p.extract_text() or "") for i, p in enumerate(pdf.pages)]
+        return [(i + 1, limpiar_cabeceras(p.extract_text() or "")) for i, p in enumerate(pdf.pages)]
 
 
 def _docx(path: Path) -> list[tuple[int, str]]:
