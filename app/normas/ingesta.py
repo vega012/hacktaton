@@ -48,7 +48,8 @@ REGULADOR_RE = re.compile(
 CODIGO_RE = re.compile(r"\b[A-Z]{2,6}(?:-[A-Z]{2,6})*-\d{4}-\d{2,4}\b")
 DEROGA_RE = re.compile(r"der[oó]g\w*|d[ée]jese\s+sin\s+efecto|d[ée]janse\s+sin\s+efecto|quedan?\s+sin\s+efecto",
                        re.IGNORECASE)
-MIN_CHARS = 120  # caracteres sin espacios por debajo de los cuales no se indexa
+MIN_CHARS = 60  # caracteres sin espacios (sin la ficha) por debajo de los cuales no se indexa;
+# una circular de un solo artículo corto es válida (p. ej. CI-2025-013, 117 caracteres)
 
 # Un documento a la vez en la fase de comparación/publicación (evita carreras entre subidas simultáneas)
 LOCK = threading.Lock()

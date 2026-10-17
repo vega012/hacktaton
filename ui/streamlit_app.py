@@ -206,10 +206,15 @@ def _subir_y_seguir(nombre: str, contenido: bytes, timeout_s: float = 180, inter
         if etapa == "listo":
             res["resultado"] = "listo"
             altas = p.get("n_discrepancias_altas") or 0
-            if p.get("estado") == "pendiente_revision" or altas:
+            if p.get("estado") == "pendiente_revision":
                 stt.update(label=f"🟠 {nombre}: indexado · requiere revisión ({altas} ALTAS)", state="complete")
                 st.warning(f"Requiere revisión: {altas} discrepancias ALTAS — no se publica para el Agente 2 "
                            "hasta decisión humana.")
+            elif altas:  # la norma nueva prevalece (p. ej. externa) y queda publicada; las ALTAS señalan a otras
+                stt.update(label=f"✅ {nombre}: publicada · {altas} discrepancias ALTAS abiertas en otras normas",
+                           state="complete")
+                st.info(f"Publicada: esta norma prevalece. Quedan {altas} discrepancias ALTAS abiertas sobre normas "
+                        "internas que deben adecuarse (ver Informe de discrepancias).")
             else:
                 stt.update(label=f"✅ {nombre}: listo · estado {p.get('estado') or '?'}", state="complete",
                            expanded=False)
