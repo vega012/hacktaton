@@ -735,6 +735,13 @@ with tabs[2]:
             st.markdown("**Resultado verificado**")
             st.json(det["consulta"], expanded=False)
 
+    @st.dialog("Cómo razonó el agente", width="large")
+    def _popup_razono(run_id: str, consulta: str) -> None:
+        """Ventana emergente con la traza de una consulta del chat."""
+        if consulta:
+            st.caption(f"Consulta: {md(consulta[:300])}")
+        _detalle_run(run_id)
+
     def _lista_runs(agentes: list[str], clave: str) -> None:
         filas = []
         for ag in agentes:
@@ -748,7 +755,6 @@ with tabs[2]:
             return
         filas.sort(key=lambda t: t.get("created_at") or "", reverse=True)
         if clave == "a2":  # chat: una sola tabla, con el botón "Cómo razonó" en cada fila
-            sel_key = "rz_sel_a2"
             anchos = [1.5, 2, 1.5, 5, 1.2, 1.1, 1.6]
             cab = st.columns(anchos)
             for col, txt in zip(cab, ["Fecha", "Usuario", "Agente", "Consulta", "Estado", "Latencia", ""]):
@@ -762,14 +768,8 @@ with tabs[2]:
                 c[4].caption(md(t.get("estado") or ""))
                 lat = t.get("latencia_ms")
                 c[5].caption(f"{lat / 1000:.1f} s" if isinstance(lat, (int, float)) else "—")
-                abierto = st.session_state.get(sel_key) == t["run_id"]
-                if c[6].button("Ocultar" if abierto else "Cómo razonó", key=f"rz_{t['run_id']}",
-                               type="primary" if abierto else "secondary"):
-                    st.session_state[sel_key] = None if abierto else t["run_id"]
-                    st.rerun()
-                if abierto:
-                    with st.container(border=True):
-                        _detalle_run(t["run_id"])
+                if c[6].button("Cómo razonó", key=f"rz_{t['run_id']}"):
+                    _popup_razono(t["run_id"], t.get("entrada") or "")
             return
         df = pd.DataFrame(filas)
         st.dataframe(df[[c for c in ["created_at", "run_id", "agente", "canal", "usuario", "entrada", "estado",
