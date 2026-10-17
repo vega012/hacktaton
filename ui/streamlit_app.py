@@ -479,7 +479,8 @@ with tabs[5]:
             dfc = _df(_g(tend, "consultas"), ["t", "n", "sin_cobertura"])
             ycols = [x for x in ["n", "sin_cobertura"] if dfc is not None and x in dfc.columns]
             if dfc is not None and "t" in dfc.columns and ycols:
-                st.line_chart(dfc.set_index("t")[ycols])
+                # barras: con un solo bucket una línea no se dibuja
+                st.bar_chart(dfc.set_index("t")[ycols], stack=False)
             else:
                 st.caption(SD)
 
