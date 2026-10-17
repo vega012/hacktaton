@@ -469,49 +469,108 @@ with tabs[1]:
 
 # ------------------------------------------------------------------ Trazas
 with tabs[2]:
-    st.subheader("Trazas de ejecución de agentes")
-    ts, err = api("GET", "/trazas", params={"limit": 50})
-    if err:
-        st.warning(f"No se pudieron cargar las trazas: {err}")
-    elif not ts:
-        st.info("Aún no hay trazas.")
-    else:
-        df = pd.DataFrame(ts)
+    st.subheader("Trazas de ejecución por agente")
+    ICON = {"input": "📥", "thought": "💭", "tool_call": "🛠️", "tool_result": "📦", "final": "✅",
+            "error": "❌", "verificacion": "🧪", "handoff": "🔀", "guardrail": "🛡️"}
+
+    def _detalle_run(run_id: str) -> None:
+        """Detalle de una ejecución de agente (tabla trazas): pasos, herramientas y fragmentos con score."""
+        det, err = api("GET", f"/trazas/{run_id}")
+        if err:
+            st.warning(err)
+            return
+        st.markdown(f"**Entrada:** {md(det.get('entrada'))}")
+        st.markdown(f"**Salida:** {md(det.get('salida'))}")
+        st.caption(f"modelo {det.get('modelo')} · {det.get('latencia_ms')} ms · {det.get('estado')} · "
+                   f"inicio {det.get('started_at') or '-'} · fin {det.get('finished_at') or '-'}")
+        for p in det.get("pasos", []):
+            data = p.get("data") or {}
+            with st.expander(f"{ICON.get(p.get('type'), '•')} #{p.get('n')} {p.get('agent')} / "
+                             f"{p.get('type')}: {(p.get('summary') or '')[:110]}"):
+                if p.get("type") == "tool_call":
+                    st.json(data.get("arguments", {}))
+                elif p.get("type") == "tool_result":
+                    res = data.get("result", {})
+                    hits = (res.get("hits") or res.get("no_vigentes") or res.get("fragmentos")
+                            or res.get("candidatos")) if isinstance(res, dict) else None
+                    if hits and isinstance(hits, list):
+                        dfh = pd.DataFrame(hits)
+                        cols = [c for c in ["id", "chunk_id", "best_score", "score", "rerank_score", "doc_id",
+                                            "articulo", "version", "estado"] if c in dfh.columns]
+                        st.dataframe(dfh[cols] if cols else dfh, width="stretch", hide_index=True)
+                    else:
+                        st.json(res)
+                else:
+                    st.write(data.get("full") or p.get("summary"))
+        if det.get("consulta"):
+            st.markdown("**Resultado verificado**")
+            st.json(det["consulta"], expanded=False)
+
+    def _lista_runs(agentes: list[str], clave: str) -> None:
+        filas = []
+        for ag in agentes:
+            ts, err = api("GET", "/trazas", params={"agente": ag, "limit": 100})
+            if err:
+                st.warning(f"No se pudieron cargar las trazas de {ag}: {err}")
+            elif isinstance(ts, list):
+                filas.extend(ts)
+        if not filas:
+            st.info("Aún no hay ejecuciones registradas para este agente.")
+            return
+        filas.sort(key=lambda t: t.get("created_at") or "", reverse=True)
+        df = pd.DataFrame(filas)
         st.dataframe(df[[c for c in ["created_at", "run_id", "agente", "canal", "usuario", "entrada", "estado",
                                      "latencia_ms"] if c in df.columns]], width="stretch", hide_index=True)
-        opciones = {f"{t['run_id']} · {t.get('agente')} · {(t.get('entrada') or '')[:60]}": t["run_id"] for t in ts}
-        sel = st.selectbox("Ver detalle", list(opciones))
+        opciones = {f"{t['run_id']} · {t.get('agente')} · {(t.get('entrada') or '')[:60]}": t["run_id"]
+                    for t in filas}
+        sel = st.selectbox("Ver detalle", list(opciones), key=f"sel_{clave}")
         if sel:
-            det, err = api("GET", f"/trazas/{opciones[sel]}")
+            _detalle_run(opciones[sel])
+
+    t_a1, t_a2 = st.tabs(["🧾 Agente 1 · Ingesta y validación", "💬 Agente 2 · Chat de consultas y casos"])
+
+    with t_a1:
+        st.caption("Pipeline de ingesta por documento (recepción, hash, metadatos con confianza, chunks, "
+                   "afirmaciones, candidatos, comparación, discrepancias confirmadas/descartadas, decisión) "
+                   "y ejecuciones del agente validador.")
+        docs, err = api("GET", "/documentos")
+        if err:
+            st.warning(f"No se pudieron cargar los documentos: {err}")
+            docs = []
+        docs = docs if isinstance(docs, list) else []
+        st.markdown("#### Traza de ingesta por documento")
+        if not docs:
+            st.info("Aún no hay documentos cargados.")
+        else:
+            op = {f"{d.get('codigo') or d.get('doc_id')} · {d.get('nombre_norma') or ''} · {d.get('estado') or ''}":
+                  d.get("doc_id") for d in docs}
+            sel_doc = st.selectbox("Documento", list(op), key="tr_doc")
+            pasos, err = api("GET", f"/documentos/{op[sel_doc]}/traza") if sel_doc else ([], None)
             if err:
-                st.warning(err)
+                st.warning(f"Traza de ingesta no disponible: {err}")
+            elif not pasos:
+                st.info("Este documento no tiene pasos de ingesta registrados.")
             else:
-                st.markdown(f"**Entrada:** {det.get('entrada')}")
-                st.markdown(f"**Salida:** {det.get('salida')}")
-                st.caption(f"modelo {det.get('modelo')} · {det.get('latencia_ms')} ms · {det.get('estado')}")
-                ICON = {"input": "📥", "thought": "💭", "tool_call": "🛠️", "tool_result": "📦", "final": "✅",
-                        "error": "❌", "verificacion": "🧪", "handoff": "🔀", "guardrail": "🛡️"}
-                for p in det.get("pasos", []):
-                    data = p.get("data") or {}
-                    with st.expander(f"{ICON.get(p.get('type'), '•')} #{p.get('n')} {p.get('agent')} / "
-                                     f"{p.get('type')}: {p.get('summary', '')[:110]}"):
-                        if p.get("type") == "tool_call":
-                            st.json(data.get("arguments", {}))
-                        elif p.get("type") == "tool_result":
-                            res = data.get("result", {})
-                            hits = res.get("hits") or res.get("no_vigentes") or res.get("fragmentos")
-                            if hits:
-                                st.dataframe(pd.DataFrame(hits)[[c for c in ["id", "best_score", "score",
-                                             "rerank_score", "doc_id", "articulo", "version", "estado"]
-                                             if c in pd.DataFrame(hits).columns]],
-                                             width="stretch", hide_index=True)
-                            else:
-                                st.json(res)
-                        else:
-                            st.write(data.get("full") or p.get("summary"))
-                if det.get("consulta"):
-                    st.markdown("**Resultado verificado**")
-                    st.json(det["consulta"], expanded=False)
+                dfp = pd.DataFrame(pasos)
+                st.dataframe(dfp[[c for c in ["timestamp", "paso", "modelo", "tokens", "latencia_ms", "usuario"]
+                                  if c in dfp.columns]], width="stretch", hide_index=True)
+                if "latencia_ms" in dfp.columns:
+                    st.caption(f"latencia total: {pd.to_numeric(dfp['latencia_ms'], errors='coerce').sum():.0f} ms "
+                               f"· {len(dfp)} pasos")
+                for p in pasos:
+                    with st.expander(f"{p.get('paso')} · {p.get('latencia_ms') or 0} ms"):
+                        c1, c2 = st.columns(2)
+                        c1.markdown("**Entrada**")
+                        c1.code(str(p.get("entrada") or ""), language="json")
+                        c2.markdown("**Salida**")
+                        c2.code(str(p.get("salida") or ""), language="json")
+        st.markdown("#### Ejecuciones del agente validador")
+        _lista_runs(["validador"], "a1")
+
+    with t_a2:
+        st.caption("Agente de consultas y agente analista de casos (chat): herramientas usadas, fragmentos "
+                   "recuperados con ID y score, verificación de citas y salida.")
+        _lista_runs(["consultas", "analista_casos"], "a2")
 
 # ------------------------------------------------------------------ Dashboard
 with tabs[3]:
