@@ -1,20 +1,14 @@
 """API JSON: lanzar casos, consultar trazas y resolver aprobaciones."""
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-import app.sector  # noqa: F401  registra tools y validadores
 from app.agents.engine import engine
 from app.agents.trace import store
-from app.sector.agents import CASO_EJEMPLO, FLOW
+from sectors import active
 
 router = APIRouter(prefix="/api")
-
-UI_CONFIG = Path(__file__).resolve().parents[1] / "config" / "ui.json"
 
 
 class RunRequest(BaseModel):
@@ -30,19 +24,21 @@ class DecisionRequest(BaseModel):
 
 @router.get("/ui")
 def ui_config() -> dict:
-    """Textos de la interfaz (editables en config/ui.json) + caso de ejemplo."""
-    return {"ui": json.loads(UI_CONFIG.read_text(encoding="utf-8")), "example": CASO_EJEMPLO}
+    """Textos de la interfaz (sectors/ui_base.json + sectors/<SECTOR>/ui.json) + caso de ejemplo."""
+    pack = active()
+    return {"ui": pack.ui, "example": pack.example, "sector": pack.name}
 
 
 @router.get("/example")
 def example() -> dict:
-    return {"input": CASO_EJEMPLO}
+    return {"input": active().example}
 
 
 @router.post("/runs", status_code=202)
 def create_run(req: RunRequest) -> dict:
-    text = (req.input or "").strip() or CASO_EJEMPLO
-    run = engine.start(FLOW, text, case=req.case, background=True)
+    pack = active()
+    text = (req.input or "").strip() or pack.example
+    run = engine.start(pack.flow, text, case=req.case, background=True)
     return {"id": run.id, "status": run.status}
 
 

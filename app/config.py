@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "Hack AI Agents"
+    sector: str = "generico"  # generico | banca | mineria | manufactura
     log_level: str = "INFO"
 
     deepseek_api_key: str = ""

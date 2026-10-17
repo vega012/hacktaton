@@ -1,6 +1,6 @@
 """Caso de ejemplo de punta a punta desde consola (sin UI).
 
-Uso: python scripts/run_example.py [--rechazar]
+Uso: python scripts/run_example.py [--rechazar]     (el sector sale de SECTOR en .env / entorno)
 """
 from __future__ import annotations
 
@@ -10,10 +10,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import app.sector  # noqa: E402,F401  registra tools y validadores
 from app.agents.engine import engine  # noqa: E402
 from app.logging_config import setup_logging  # noqa: E402
-from app.sector.agents import CASO_EJEMPLO as CASO, FLOW  # noqa: E402
+from sectors import active  # noqa: E402
 
 
 
@@ -31,7 +30,9 @@ def main() -> int:
     args = ap.parse_args()
     setup_logging("WARNING")
 
-    run = engine.start(FLOW, CASO, case="ejemplo")
+    pack = active()
+    print(f"Sector: {pack.name}")
+    run = engine.start(pack.flow, pack.example, case="ejemplo")
     while run.status == "waiting_approval":
         for a in run.pending_approvals():
             print(f"\n*** Aprobación pendiente {a.id}: {a.tool}({a.arguments}) — {a.reason}")

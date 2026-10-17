@@ -1,6 +1,7 @@
-"""Agentes y flujo del caso. Cambiar roles/tools/flujo aquí al adaptar al sector."""
+"""Pack genérico: analista -> ejecutor sobre entidades y órdenes."""
 from app.agents.agent import Agent
 from app.agents.flow import Flow
+from sectors.generico import tools  # noqa: F401  registra tools y validadores
 
 analista = Agent(
     name="analista",
@@ -26,7 +27,7 @@ ejecutor = Agent(
 
 FLOW = Flow(agents=[analista, ejecutor], start="analista")
 
-# Caso de ejemplo de punta a punta (usado por la API y scripts/run_example.py)
+# Caso de ejemplo de punta a punta
 CASO_EJEMPLO = (
     "Revisa las entidades ENT-001 y ENT-002. A cada una que esté activa créale una orden de 3000 "
     "por 'mantenimiento preventivo'. Luego resume qué se hizo."

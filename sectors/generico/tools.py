@@ -2,16 +2,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from app.agents.guardrails import validator
 from app.agents.tools import tool
+from sectors import load_json
 
-# Datos simulados (en la etapa 6 se cargan desde data/)
-ENTIDADES: dict[str, dict] = {
-    "ENT-001": {"id": "ENT-001", "nombre": "Cliente Alfa", "estado": "activo", "saldo": 25000, "riesgo": "bajo"},
-    "ENT-002": {"id": "ENT-002", "nombre": "Cliente Beta", "estado": "bloqueado", "saldo": 1200, "riesgo": "alto"},
-    "ENT-003": {"id": "ENT-003", "nombre": "Cliente Gamma", "estado": "activo", "saldo": 8000, "riesgo": "medio"},
-}
+DATA = Path(__file__).parent / "data"
+ENTIDADES: dict[str, dict] = {e["id"]: e for e in load_json(DATA / "entidades.json")}
 ORDENES: list[dict] = []
 
 

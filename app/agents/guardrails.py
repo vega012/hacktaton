@@ -1,7 +1,7 @@
 """Reglas / guardrails que se evalúan ANTES de ejecutar cada tool.
 
 Fuentes de reglas:
-  1. config/guardrails.json (editable sin tocar código):
+  1. sectors/<SECTOR>/guardrails.json (editable sin tocar código):
        blocked_tools          -> tools prohibidas
        max_values             -> {"monto": 50000}: si un argumento supera el máximo, se bloquea
        approval_thresholds    -> {"monto": 10000}: si un argumento supera el umbral, requiere aprobación
@@ -22,7 +22,8 @@ from app.agents.tools import Tool
 
 log = logging.getLogger("guardrails")
 
-DEFAULT_RULES_PATH = Path(__file__).resolve().parents[2] / "config" / "guardrails.json"
+# La define el pack de sector activo (sectors/__init__.py) al cargarse
+RULES_PATH: Path | None = None
 
 Validator = Callable[[dict[str, Any]], "str | None"]
 _validators: dict[str, list[Validator]] = {}
@@ -52,8 +53,9 @@ class Rules:
     require_approval_tools: list[str] = field(default_factory=list)
 
     @classmethod
-    def load(cls, path: Path = DEFAULT_RULES_PATH) -> "Rules":
-        if not path.exists():
+    def load(cls, path: Path | None = None) -> "Rules":
+        path = path or RULES_PATH
+        if path is None or not path.exists():
             log.warning("No existe %s, se usan reglas vacías", path)
             return cls()
         data = json.loads(path.read_text(encoding="utf-8"))
