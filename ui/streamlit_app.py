@@ -68,7 +68,7 @@ def mostrar_respuesta(r: dict) -> None:
 st.title("📚 Normativa Bancaria · Agentes de IA")
 st.caption(f"API: {API}")
 
-tabs = st.tabs(["💬 Consultar", "📑 Normas", "⚖️ Discrepancias", "🔎 Trazas", "📊 Dashboard"])
+tabs = st.tabs(["💬 Consultar", "📑 Normas", "⚖️ Discrepancias", "🔎 Trazas", "📊 Dashboard", "🎯 KPIs"])
 
 # ------------------------------------------------------------------ Consultar
 with tabs[0]:
@@ -232,3 +232,253 @@ with tabs[4]:
             st.bar_chart(pd.Series(disc["por_tipo"], name="n"))
         if disc.get("recientes"):
             st.dataframe(pd.DataFrame(disc["recientes"]), width="stretch", hide_index=True)
+
+# ------------------------------------------------------------------ KPIs
+SD = "sin datos"
+
+
+def _g(d, *keys, default=None):
+    """Acceso seguro a dicts anidados (tolera None / tipos inesperados)."""
+    for k in keys:
+        if not isinstance(d, dict):
+            return default
+        d = d.get(k)
+    return default if d is None else d
+
+
+def _pct(v) -> str:
+    try:
+        return SD if v is None else f"{float(v) * 100:.1f} %"
+    except (TypeError, ValueError):
+        return SD
+
+
+def _num(v, fmt="{:.1f}", suf="") -> str:
+    try:
+        return SD if v is None else fmt.format(float(v)) + suf
+    except (TypeError, ValueError):
+        return SD
+
+
+def _desglose(d) -> str:
+    d = d if isinstance(d, dict) else {}
+    return " · ".join(f"{k}: {v}" for k, v in d.items()) if d else SD
+
+
+def _lista(x):
+    return ", ".join(map(str, x)) if isinstance(x, list) else x
+
+
+def _kpi_pct(col, titulo: str, k, unidad: str = "consultas", extra: str | None = None) -> None:
+    with col.container(border=True):
+        st.metric(titulo, _pct(_g(k, "valor")))
+        num, den = _g(k, "num", default=0), _g(k, "den", default=0)
+        st.caption(f"{num} de {den} {unidad}" if den else f"0 de 0 {unidad} · {SD}")
+        if extra:
+            st.caption(extra)
+
+
+def _df(rows, cols: list[str]):
+    if not isinstance(rows, list) or not rows:
+        return None
+    df = pd.DataFrame([r for r in rows if isinstance(r, dict)])
+    if df.empty:
+        return None
+    sel = [c for c in cols if c in df.columns]
+    return df[sel] if sel else df
+
+
+def fetch_kpis(params: dict):
+    """GET /api/kpis; devuelve (datos, error). Nunca lanza."""
+    return api("GET", "/kpis", params=params, timeout=60)
+
+
+with tabs[5]:
+    import datetime as _dt
+
+    st.subheader("🎯 KPIs · valor medible de los agentes")
+    hoy = _dt.date.today()
+    f = st.columns([1, 1, 1, 1, 1.3])
+    desde = f[0].date_input("Desde", value=hoy, key="k_desde")
+    hasta = f[1].date_input("Hasta", value=hoy, key="k_hasta")
+    gran = f[2].selectbox("Granularidad tendencia", ["10min", "hora", "dia"], index=1, key="k_gran")
+    umbral_txt = f[3].text_input("Umbral de score (vacío = backend)", value="", key="k_umbral")
+    t_manual = f[4].number_input("Tiempo manual de referencia (min)", min_value=0.0, value=15.0, step=1.0,
+                                 key="k_tman")
+    params = {"desde": str(desde), "hasta": str(hasta), "granularidad": gran, "tiempo_manual_min": t_manual}
+    if umbral_txt.strip():
+        try:
+            params["umbral"] = float(umbral_txt.replace(",", "."))
+        except ValueError:
+            st.warning("Umbral inválido: se usa el del backend.")
+
+    try:
+        kp, err = fetch_kpis(params)
+    except Exception as e:  # el fetch no debería lanzar, pero por si acaso
+        kp, err = None, f"{type(e).__name__}: {e}"
+    if err or not isinstance(kp, dict):
+        st.warning(f"No se pudieron cargar los KPIs: {err or 'respuesta inválida'}")
+        kp = {}
+    try:
+        cal, prev = _g(kp, "calidad", default={}), _g(kp, "prevencion", default={})
+        efi, traz = _g(kp, "eficiencia", default={}), _g(kp, "trazabilidad", default={})
+        tend = _g(kp, "tendencia", default={})
+        total = _g(cal, "total_consultas", default=0)
+        st.info(f"Backend de búsqueda: **{_g(kp, 'backend', default=SD)}** · umbral usado: "
+                f"**{_g(kp, 'umbral', default='el del backend')}** · consultas en el rango: **{total}** "
+                f"({_desglose(_g(cal, 'por_tipo'))}) · generado: {_g(kp, 'generado_at', default=SD)}")
+        if not total:
+            st.warning("Sin consultas registradas en el rango: los indicadores muestran «sin datos» "
+                       "(no se inventan cifras).")
+
+        # ---------------- A
+        st.markdown("## A. Calidad de las respuestas")
+        a = st.columns(4)
+        _kpi_pct(a[0], "1 · Con cita verificable", _g(cal, "con_cita"))
+        sc = _g(cal, "sin_cobertura", default={})
+        _kpi_pct(a[1], "2 · Sin cobertura", sc,
+                 extra=f"no encontró: {_g(sc, 'no_encontro', default=0)} · score bajo: "
+                       f"{_g(sc, 'score_bajo', default=0)}")
+        ad = _g(cal, "con_advertencia", default={})
+        _kpi_pct(a[2], "3 · Con advertencia", ad,
+                 extra=f"conflicto: {_g(ad, 'conflicto', default=0)} · obsoleta: {_g(ad, 'obsoleta', default=0)}")
+        cp = _g(cal, "confianza_promedio", default={})
+        with a[3].container(border=True):
+            st.metric("4 · Confianza promedio", _num(_g(cp, "valor"), "{:.2f}"))
+            st.caption(f"sobre {_g(cp, 'n', default=0)} consultas")
+            dist = _g(cp, "distribucion", default={})
+            if isinstance(dist, dict) and dist:
+                st.caption(f"🟢 alta: {dist.get('alta', 0)} · 🟡 media: {dist.get('media', 0)} · "
+                           f"🔴 sin respaldo: {dist.get('sin_respaldo', 0)}")
+            else:
+                st.caption(f"distribución: {SD}")
+
+        # ---------------- B
+        st.markdown("## B. Valor de prevención")
+        b = st.columns(3)
+        disc = _g(prev, "discrepancias", default={})
+        with b[0].container(border=True):
+            st.metric("5 · Discrepancias detectadas", _g(disc, "total", default=0))
+            st.caption(f"por severidad: {_desglose(_g(disc, 'por_severidad'))}")
+            st.caption(f"por tipo: {_desglose(_g(disc, 'por_tipo'))}")
+        obs = _g(prev, "normas_obsoletas", default={})
+        with b[1].container(border=True):
+            st.metric("6 · Normas obsoletas", _g(obs, "total", default=0))
+            dfo = _df(_g(obs, "lista"), ["doc_id", "nombre_norma", "estado", "reemplazada_por"])
+            if dfo is not None:
+                st.dataframe(dfo, width="stretch", hide_index=True)
+            else:
+                st.caption(SD)
+        with b[2].container(border=True):
+            st.markdown("**7 · Documentos afectados por norma**")
+            dfa = _df(_g(prev, "afectados_por_norma"), ["nombre_norma", "doc_id", "n", "afectados"])
+            if dfa is not None:
+                if "afectados" in dfa.columns:
+                    dfa["afectados"] = dfa["afectados"].apply(_lista)
+                st.dataframe(dfa, width="stretch", hide_index=True)
+            else:
+                st.caption(SD)
+
+        # ---------------- C
+        st.markdown("## C. Eficiencia")
+        c = st.columns([1, 1, 1.4])
+        tr = _g(efi, "tiempo_respuesta_s", default={})
+        with c[0].container(border=True):
+            st.metric("8 · Tiempo promedio de respuesta", _num(_g(tr, "promedio"), suf=" s"))
+            st.caption(f"mediana: {_num(_g(tr, 'mediana'), suf=' s')} · n = {_g(tr, 'n', default=0)}")
+        with c[1].container(border=True):
+            st.markdown("**8 · Por agente**")
+            pa = _g(tr, "por_agente", default={})
+            if isinstance(pa, dict) and pa:
+                st.dataframe(pd.DataFrame([{"agente": k, "promedio_s": _g(v, "promedio"),
+                                            "mediana_s": _g(v, "mediana"), "n": _g(v, "n", default=0)}
+                                           for k, v in pa.items()]), width="stretch", hide_index=True)
+            else:
+                st.caption(SD)
+        ta = _g(efi, "tiempo_ahorrado", default={})
+        with c[2].container(border=True):
+            st.markdown("<span class='badge' style='background:#b26a00'>ESTIMADO · supuesto editable</span>",
+                        unsafe_allow_html=True)
+            st.metric("9 · Tiempo ahorrado (estimado)", _num(_g(ta, "horas"), suf=" h"))
+            st.caption(f"Supuesto: {_g(ta, 'supuesto', default=SD)}")
+            st.caption(f"= {_g(ta, 'consultas', default=0)} consultas × "
+                       f"({_g(ta, 'tiempo_manual_min', default=t_manual)} min − "
+                       f"{_num(_g(tr, 'promedio'), suf=' s')}). No es una medición: ajusta el tiempo manual arriba.")
+
+        # ---------------- D
+        st.markdown("## D. Trazabilidad y gobierno")
+        d = st.columns([1, 2])
+        tc = _g(traz, "trazas_completas", default={})
+        _kpi_pct(d[0], "10 · Trazas completas (objetivo 100 %)", tc, unidad="ejecuciones")
+        inc = _g(tc, "incompletas", default=[])
+        with d[0].expander(f"Trazas incompletas ({len(inc) if isinstance(inc, list) else 0})"):
+            dfi = _df(inc, ["run_id", "agente", "faltan"])
+            if dfi is not None:
+                if "faltan" in dfi.columns:
+                    dfi["faltan"] = dfi["faltan"].apply(_lista)
+                st.dataframe(dfi, width="stretch", hide_index=True)
+            else:
+                st.caption(f"ninguna registrada ({SD} si no hay ejecuciones)")
+        with d[1].container(border=True):
+            st.markdown("**11 · Top 10 normas más consultadas**")
+            dft = _df(_g(traz, "top_normas"), ["nombre_norma", "doc_id", "n"])
+            if dft is not None and "n" in dft.columns:
+                dft = dft.head(10)
+                idx = "nombre_norma" if "nombre_norma" in dft.columns else dft.columns[0]
+                st.bar_chart(dft.set_index(idx)["n"], horizontal=True)
+            else:
+                st.caption(SD)
+            st.markdown("**11 · Normas que faltan (brechas por tema)**")
+            br = _g(traz, "brechas", default=[])
+            if isinstance(br, list) and br:
+                for x in br:
+                    if isinstance(x, dict):
+                        st.markdown(f"**{x.get('tema', '?')}** · {x.get('n', 0)} consulta(s)")
+                        for ej in (x.get("ejemplos") or [])[:3]:
+                            st.caption(f"• {ej}")
+            else:
+                st.caption(SD)
+
+        # ---------------- Gráficos
+        st.markdown("## Tendencias")
+        g1, g2 = st.columns(2)
+        with g1:
+            st.markdown(f"**Consultas por bucket ({_g(tend, 'granularidad', default=gran)})** · total y sin cobertura")
+            dfc = _df(_g(tend, "consultas"), ["t", "n", "sin_cobertura"])
+            ycols = [x for x in ["n", "sin_cobertura"] if dfc is not None and x in dfc.columns]
+            if dfc is not None and "t" in dfc.columns and ycols:
+                st.line_chart(dfc.set_index("t")[ycols])
+            else:
+                st.caption(SD)
+        with g2:
+            st.markdown("**Brechas por tema**")
+            dfb = _df(_g(tend, "brechas_por_tema"), ["tema", "n"])
+            if dfb is not None and {"tema", "n"} <= set(dfb.columns):
+                st.bar_chart(dfb.set_index("tema")["n"])
+            else:
+                st.caption(SD)
+
+        with st.expander("¿Cómo se calcula?"):
+            st.markdown(
+                "Fuente: consultas, trazas, discrepancias y documentos registrados por los agentes en el rango "
+                "filtrado. `null` ⇒ «sin datos».\n\n"
+                "1. **% con cita verificable** = consultas con ≥1 cita verificada / total de consultas.\n"
+                "2. **% sin cobertura** = consultas sin respaldo / total; desglose *no_encontro* (búsqueda sin "
+                "resultados) y *score_bajo* (mejor score < umbral).\n"
+                "3. **% con advertencia** = consultas con ≥1 advertencia / total; desglose *conflicto* "
+                "(discrepancia entre normas) y *obsoleta* (norma no vigente involucrada).\n"
+                "4. **Confianza promedio** = promedio sobre las n consultas con respaldo; distribución por nivel "
+                "alta / media / sin_respaldo.\n"
+                "5. **Discrepancias** = registros del agente validador, por severidad y por tipo.\n"
+                "6. **Normas obsoletas** = documentos no vigentes (reemplazada / derogada) con su reemplazo.\n"
+                "7. **Documentos afectados por norma** = documentos que referencian cada norma afectada.\n"
+                "8. **Tiempo de respuesta** = latencia registrada en la traza (s): promedio y mediana, total y por "
+                "agente.\n"
+                "9. **Tiempo ahorrado (ESTIMADO)** = consultas × (tiempo manual de referencia − tiempo promedio "
+                "del agente). El tiempo manual es un supuesto editable, no una medición.\n"
+                "10. **% trazas completas** = ejecuciones con traza completa / ejecuciones; objetivo 100 %. Las "
+                "incompletas indican qué falta.\n"
+                "11. **Top normas** = normas más citadas (top 10); **brechas** = temas consultados sin cobertura, "
+                "con conteo y ejemplos.")
+    except Exception as e:  # nunca romper la pestaña ante una forma inesperada
+        st.warning(f"Los KPIs llegaron con un formato inesperado: {type(e).__name__}: {e}")
