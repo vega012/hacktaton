@@ -128,3 +128,24 @@ def historial(session_id: str, x_usuario: str | None = Header(None)) -> list[dic
         session_id = f"{x_usuario}:{session_id}"
     from app.normas.casos import historial as hist
     return hist(session_id)
+
+
+DESCARGABLES = ("vigente", "reemplazada", "derogada", "por_entrar_en_vigencia")
+
+
+@router.get("/chat/norma/{doc_id}/archivo")
+def descargar_norma(doc_id: str):
+    """Descarga el documento original de una norma citada (solo normas publicadas, no pendientes ni rechazadas)."""
+    from fastapi.responses import FileResponse
+    filas = db.query("SELECT archivo, estado, publicado FROM documentos WHERE doc_id = ?", (doc_id,))
+    if not filas or not filas[0]["archivo"]:
+        raise HTTPException(404, "Norma no encontrada")
+    d = filas[0]
+    if d["estado"] not in DESCARGABLES or (d["estado"] == "vigente" and not d["publicado"]):
+        raise HTTPException(403, "Esta norma no está publicada")
+    ruta = Path(d["archivo"])
+    ruta = (ruta if ruta.is_absolute() else db.ROOT / ruta).resolve()
+    if not ruta.is_file() or db.ROOT.resolve() not in ruta.parents:
+        raise HTTPException(404, "Archivo no disponible")
+    nombre = re.sub(r"^\d{10,}_", "", ruta.name)  # quita el prefijo de tiempo de las subidas repetidas
+    return FileResponse(ruta, filename=nombre)

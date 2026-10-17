@@ -80,6 +80,10 @@ h3.sec{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--
 .cites{display:grid;gap:10px}
 .cite{border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;background:var(--surface);box-shadow:var(--shadow)}
 .cite .hd{font-weight:600;font-size:15px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;letter-spacing:-.01em;line-height:1.4}
+.dl{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:500;color:var(--acc);text-decoration:none;border:1px solid var(--line);border-radius:999px;padding:3px 10px;margin-left:auto;transition:background .15s,border-color .15s}
+.dl:hover{background:color-mix(in srgb,var(--acc) 8%,transparent);border-color:color-mix(in srgb,var(--acc) 35%,var(--line))}
+.dl svg{width:13px;height:13px}
+.razon-btn{margin-left:auto}
 .cite .hd small{font-weight:400;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
 .cite q,.quote{display:block;margin-top:8px;color:var(--muted);font-size:15px;line-height:1.6;quotes:"\201C" "\201D"}
 .aplica{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:10px;font-size:12.5px;color:var(--faint)}
@@ -234,7 +238,7 @@ details>summary{cursor:pointer}
 </main>
 <div id="scrim"></div>
 <aside id="drawer" aria-label="Razonamiento del agente">
-  <div class="dh"><h2>Razonamiento del agente</h2><button class="linkbtn" id="dclose" type="button">Cerrar</button></div>
+  <div class="dh"><h2>Cómo razonó el agente</h2><button class="linkbtn" id="dclose" type="button">Cerrar</button></div>
   <div class="dc" id="dcontent"></div>
 </aside>
 <script>
@@ -349,6 +353,15 @@ function renderAplica(c){
   if (!a.length) return null;
   return h("div", {class:"aplica"}, h("span", {text:"Aplica a:"}), a.map(function(x){ return h("span", {class:"achip", text: x}); }));
 }
+var ES_ADMIN = false;
+var ICON_DL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>';
+function linkDescarga(docId){
+  if (!docId) return null;
+  var a = h("a", {class:"dl", href: "/api/chat/norma/" + encodeURIComponent(docId) + "/archivo", download: "", title: "Descargar el documento de la norma " + docId});
+  a.innerHTML = ICON_DL;  // icono estático, sin datos del servidor
+  add(a, h("span", {text: "Descargar norma"}));
+  return a;
+}
 function renderCitas(citas){
   citas = arr(citas); if (!citas.length) return null;
   return [h("h3", {class:"sec", text:"Citas verificadas"}),
@@ -356,7 +369,7 @@ function renderCitas(citas){
       return h("div", {class:"cite"},
         h("div", {class:"hd"}, s(c.nombre_norma || c.doc_id), " ",
           h("small", {text: [c.doc_id && c.nombre_norma ? c.doc_id : null, c.articulo ? "Art. " + c.articulo : null, c.version ? "v" + c.version : null].filter(Boolean).join(" · ")}), " ",
-          estadoBadge(c.estado)),
+          estadoBadge(c.estado), linkDescarga(c.doc_id)),
         c.texto ? h("q", {text: plano(c.texto)}) : null,
         renderAplica(c),
         c.nota_area ? h("div", {class:"nota-area", text: s(c.nota_area)}) : null);
@@ -389,7 +402,7 @@ function renderDictamen(d){
     var r = RES[e.resultado] || ["b-gray", s(e.resultado) || "—"];
     return h("div", {class:"eval"},
       h("div", {class:"top"}, h("div", {class:"regla", text: e.regla}), h("span", {class:"badge " + r[0], text: r[1]})),
-      h("div", {class:"ref", text: refNorma(e)}),
+      h("div", {class:"ref"}, h("span", {text: refNorma(e)}), " ", linkDescarga(e.doc_id)),
       e.cita ? h("details", null, h("summary", {text:"Ver cita literal"}), h("span", {class:"quote", text: "“" + plano(e.cita) + "”"})) : null,
       e.explicacion ? h("div", {class:"expl", text: e.explicacion}) : null);
   })]);
@@ -419,7 +432,9 @@ function bubbleAgent(r){
   var meta = h("div", {class:"meta"}, confBadge(r.confianza));
   if (r.latencia_ms != null && r.latencia_ms !== "") add(meta, h("span", {text: "Latencia " + (Number(r.latencia_ms) / 1000).toFixed(1) + " s"}));
   var rid = r.run_id;
-  // El razonamiento del agente se revisa en Trazas (panel del administrador), no en el chat del empleado.
+  // "Cómo razonó": solo para el administrador (el empleado no ve la traza; también está en Trazas del panel).
+  if (rid) add(meta, h("button", {class:"linkbtn razon-btn", type:"button", text:"Cómo razonó",
+    hidden: ES_ADMIN ? null : "", onclick: function(){ openTrace(rid); }}));
   add(b, meta);
   msgs.appendChild(h("div", {class:"row a"}, b));
   scrollEnd();
@@ -634,7 +649,11 @@ function openTrace(runId){
 
 fetch("/auth/me", {credentials: "same-origin"}).then(function(r){ return r.json(); }).then(function(me){
   if (me && me.usuario) $("who").textContent = me.usuario + (me.area ? " · " + me.area : (me.rol === "admin" ? " · administrador" : " · empleado"));
-  if (me && me.rol === "admin") $("adminlink").hidden = false;
+  if (me && me.rol === "admin") {
+    $("adminlink").hidden = false;
+    ES_ADMIN = true;
+    Array.prototype.forEach.call(document.querySelectorAll(".razon-btn"), function(b){ b.hidden = false; });
+  }
 }).catch(function(){});
 cargarHistorial();
 inp.focus();

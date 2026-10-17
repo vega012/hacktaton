@@ -737,6 +737,21 @@ with tabs[2]:
         df = pd.DataFrame(filas)
         st.dataframe(df[[c for c in ["created_at", "run_id", "agente", "canal", "usuario", "entrada", "estado",
                                      "latencia_ms"] if c in df.columns]], width="stretch", hide_index=True)
+        if clave == "a2":  # chat: una fila por consulta con su botón "Cómo razonó"
+            st.markdown("#### Consultas del chat")
+            sel_key = "rz_sel_a2"
+            for t in filas[:40]:
+                c = st.columns([6, 2, 2, 1.6])
+                c[0].markdown(f"**{md((t.get('entrada') or '')[:110])}**")
+                c[1].caption(md(t.get("usuario") or "—"))
+                c[2].caption(f"{t.get('agente') or ''} · {(t.get('created_at') or '')[11:16]}")
+                if c[3].button("Cómo razonó", key=f"rz_{t['run_id']}"):
+                    st.session_state[sel_key] = t["run_id"]
+                if st.session_state.get(sel_key) == t["run_id"]:
+                    with st.container(border=True):
+                        st.markdown("**Cómo razonó el agente**")
+                        _detalle_run(t["run_id"])
+            return
         opciones = {f"{t['run_id']} · {t.get('agente')} · {(t.get('entrada') or '')[:60]}": t["run_id"]
                     for t in filas}
         sel = st.selectbox("Ver detalle", list(opciones), key=f"sel_{clave}")
