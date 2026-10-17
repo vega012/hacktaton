@@ -7,6 +7,7 @@ services:
       - "127.0.0.1:${PORT:-8000}:8000"
     volumes:
       - runs:/code/runs
+      - data:/code/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -14,10 +15,35 @@ services:
       timeout: 5s
       retries: 3
 
+  # Interfaz web (Streamlit): carga de normas, discrepancias, trazas, dashboard y chat (plan B del bot)
+  ui:
+    build: .
+    env_file: .env
+    environment:
+      API_BASE_URL: http://app:8000
+    command: ["python", "-m", "streamlit", "run", "ui/streamlit_app.py", "--server.address", "0.0.0.0",
+              "--server.port", "8501", "--server.headless", "true", "--server.enableCORS", "false",
+              "--server.enableXsrfProtection", "false", "--browser.gatherUsageStats", "false"]
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  # Bot de Telegram (polling). Sin TELEGRAM_BOT_TOKEN queda en espera sin reiniciarse en bucle.
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      API_BASE_URL: http://app:8000
+    command: ["sh", "-c", "if [ -n \"$$TELEGRAM_BOT_TOKEN\" ]; then exec python -m bot.telegram_bot; else echo 'Sin TELEGRAM_BOT_TOKEN: bot desactivado'; exec sleep infinity; fi"]
+    depends_on:
+      - app
+    restart: unless-stopped
+
   caddy:
     image: caddy:2
     depends_on:
       - app
+      - ui
     environment:
       APP_HOST: ${APP_HOST:-localhost}
     ports:
@@ -32,5 +58,6 @@ services:
 
 volumes:
   runs:
+  data:         # SQLite, índice local de respaldo y archivos subidos
   caddy_data:   # guarda los certificados: no borrar entre despliegues
   caddy_config:

@@ -1,5 +1,12 @@
 # Plan B (CADDY_MODE=http): sirve la app por HTTP directo en la IP, sin certificado.
 :80 {
 	encode gzip
-	reverse_proxy app:8000
+	# API y salud -> FastAPI; todo lo demás -> interfaz Streamlit
+	@api path /api/* /health /docs /openapi.json
+	handle @api {
+		reverse_proxy app:8000
+	}
+	handle {
+		reverse_proxy ui:8501
+	}
 }

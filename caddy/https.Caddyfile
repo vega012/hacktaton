@@ -2,5 +2,12 @@
 # APP_HOST = <IP-con-guiones>.sslip.io (ej. 203-0-113-5.sslip.io)
 {$APP_HOST} {
 	encode gzip
-	reverse_proxy app:8000
+	# API y salud -> FastAPI; todo lo demás -> interfaz Streamlit
+	@api path /api/* /health /docs /openapi.json
+	handle @api {
+		reverse_proxy app:8000
+	}
+	handle {
+		reverse_proxy ui:8501
+	}
 }
