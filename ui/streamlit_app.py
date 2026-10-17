@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -68,7 +69,7 @@ def mostrar_respuesta(r: dict) -> None:
 st.title("📚 Normativa Bancaria · Agentes de IA")
 st.caption(f"API: {API}")
 
-tabs = st.tabs(["💬 Consultar", "📑 Normas", "⚖️ Discrepancias", "🔎 Trazas", "📊 Dashboard", "🎯 KPIs"])
+tabs = st.tabs(["💬 Consultar", "🧾 Agente 1 · Normas", "🔎 Trazas", "📊 Dashboard", "🎯 KPIs"])
 
 # ------------------------------------------------------------------ Consultar
 with tabs[0]:
@@ -96,61 +97,378 @@ with tabs[0]:
                 mostrar_respuesta(r)
                 st.session_state.chat.append({"role": "assistant", "content": r})
 
-# ------------------------------------------------------------------ Normas
-with tabs[1]:
-    st.subheader("Cargar norma")
-    archivo = st.file_uploader("PDF, DOCX o TXT", type=["pdf", "docx", "txt", "md"])
-    if archivo and st.button("Subir e indexar", type="primary"):
-        with st.spinner("Enviando documento…"):
-            r, err = api("POST", "/documentos", files={"archivo": (archivo.name, archivo.getvalue())}, timeout=180)
-        st.error(err) if err else st.success(f"Recibido: {r}")
-    st.subheader("Normas registradas")
-    if st.button("🔄 Actualizar", key="ref_docs"):
+# ------------------------------------------------------------------ Agente 1 · Normas (ingesta y validación)
+ETAPAS = [("extrayendo_metadatos", "Extrayendo metadatos"), ("indexando", "Indexando"),
+          ("comparando", "Comparando"), ("informe", "Informe")]
+ETAPA_IDX = {"recibido": 0, "extrayendo_metadatos": 1, "indexando": 2, "comparando": 3, "informe": 4, "listo": 5}
+FINALES = {"listo", "requiere_revision", "error"}
+CHIP = {"vigente": ("🟢", "green"), "reemplazada": ("⚪", "gray"), "pendiente_revision": ("🟠", "orange"),
+        "rechazada": ("🔴", "red"), "derogada": ("🔴", "red"), "por_entrar_en_vigencia": ("🔵", "blue")}
+CHIP_BG = {"vigente": "#1b8a3a", "reemplazada": "#6b6b6b", "pendiente_revision": "#c77700",
+           "rechazada": "#b00020", "derogada": "#7a0016", "por_entrar_en_vigencia": "#1f5fbf"}
+SEV = {"alta": ("🔴 ALTA", "error"), "media": ("🟠 MEDIA", "warning"), "informativa": ("🔵 INFORMATIVA", "info")}
+_MD_ESPECIALES = "\\`*_{}[]<>()#+-.!|~$"
+
+
+def md(x) -> str:
+    """Escapa texto del servidor para mostrarlo literal dentro de markdown."""
+    s = "" if x is None else str(x)
+    return "".join("\\" + ch if ch in _MD_ESPECIALES else ch for ch in s)
+
+
+def _js(x):
+    """metadatos_json/confianza_json pueden llegar como dict o como string JSON."""
+    if isinstance(x, (dict, list)):
+        return x
+    if isinstance(x, str) and x.strip():
+        try:
+            import json
+            return json.loads(x)
+        except Exception:
+            return {}
+    return {}
+
+
+def chip_txt(estado) -> str:
+    e = estado or "?"
+    return f"{CHIP.get(e, ('⚫', 'gray'))[0]} {e}"
+
+
+def chip(estado) -> None:
+    e = str(estado or "?")
+    try:
+        st.badge(e, icon=None, color=CHIP.get(e, ("", "gray"))[1])
+    except Exception:
+        st.write(chip_txt(e))
+
+
+def _pasos_txt(etapa: str | None) -> str:
+    """'✅ Extrayendo metadatos → ⏳ **Indexando** → ○ Comparando → ○ Informe'."""
+    i = ETAPA_IDX.get(etapa or "", 0)
+    partes = []
+    for n, (_, lbl) in enumerate(ETAPAS, start=1):
+        if n < i or etapa == "listo":
+            partes.append(f"✅ {lbl}")
+        elif n == i:
+            partes.append(f"⏳ **{lbl}**")
+        else:
+            partes.append(f"○ {lbl}")
+    return "  →  ".join(partes)
+
+
+def _subir_y_seguir(nombre: str, contenido: bytes, timeout_s: float = 180, intervalo: float = 1.5) -> dict:
+    """POST del archivo y sondeo de /progreso con estado visual. Devuelve un resumen; nunca lanza."""
+    res = {"archivo": nombre, "doc_id": None, "resultado": "error", "mensaje": ""}
+    with st.status(f"📄 {nombre}: enviando…", expanded=True) as stt:
+        r, err = api("POST", "/documentos", files={"archivo": (nombre, contenido)}, timeout=180)
+        if err:
+            res["mensaje"] = err
+            stt.update(label=f"❌ {nombre}: rechazado", state="error")
+            st.error(f"No se aceptó el archivo: {err}")
+            return res
+        r = r if isinstance(r, dict) else {}
+        res["doc_id"] = r.get("doc_id")
+        if r.get("duplicado"):
+            res.update(resultado="duplicado", mensaje=r.get("mensaje") or "")
+            stt.update(label=f"♻️ {nombre}: ya cargado, no se reindexó", state="complete", expanded=False)
+            st.info(f"Ya cargado ({r.get('codigo') or r.get('doc_id')}), no se reindexó.")
+            return res
+        if not res["doc_id"]:
+            res["mensaje"] = "El servidor no devolvió doc_id"
+            stt.update(label=f"⚠️ {nombre}: respuesta inesperada", state="error")
+            return res
+        barra = st.progress(0.0, text="recibido")
+        pasos = st.empty()
+        t0, p, fallos = time.time(), {}, 0
+        while time.time() - t0 < timeout_s:
+            p, e2 = api("GET", f"/documentos/{res['doc_id']}/progreso", timeout=15)
+            if e2:
+                fallos += 1
+                if fallos >= 3:
+                    st.warning(f"Progreso no disponible ({e2}). El documento sigue procesándose en el servidor.")
+                    res.update(resultado="sin_progreso", mensaje=e2)
+                    stt.update(label=f"⚠️ {nombre}: enviado, sin seguimiento", state="complete")
+                    return res
+                p = {}
+            else:
+                fallos = 0
+                p = p if isinstance(p, dict) else {}
+                etapa = p.get("etapa") or "recibido"
+                barra.progress(min(ETAPA_IDX.get(etapa, 4), 5) / 5,
+                               text=f"{etapa} · {str(p.get('mensaje') or '')[:120]}")
+                pasos.markdown(_pasos_txt(etapa))
+                stt.update(label=f"📄 {nombre}: {etapa}")
+                if etapa in FINALES:
+                    break
+            time.sleep(intervalo)
+        etapa = (p or {}).get("etapa")
+        res["mensaje"] = (p or {}).get("mensaje") or ""
+        if etapa == "listo":
+            res["resultado"] = "listo"
+            altas = p.get("n_discrepancias_altas") or 0
+            if p.get("estado") == "pendiente_revision" or altas:
+                stt.update(label=f"🟠 {nombre}: indexado · requiere revisión ({altas} ALTAS)", state="complete")
+                st.warning(f"Requiere revisión: {altas} discrepancias ALTAS — no se publica para el Agente 2 "
+                           "hasta decisión humana.")
+            else:
+                stt.update(label=f"✅ {nombre}: listo · estado {p.get('estado') or '?'}", state="complete",
+                           expanded=False)
+        elif etapa == "requiere_revision":
+            res["resultado"] = "requiere_revision"
+            stt.update(label=f"🟠 {nombre}: no se indexó (requiere revisión)", state="error")
+            st.warning("No se indexó: el contenido no parece una norma válida (texto ilegible o sin artículos). "
+                       f"{res['mensaje']}")
+        elif etapa == "error":
+            stt.update(label=f"❌ {nombre}: error en la ingesta", state="error")
+            st.error(f"Error en la ingesta: {res['mensaje']}")
+        else:
+            res["resultado"] = "timeout"
+            stt.update(label=f"⏱️ {nombre}: sigue en proceso (más de {int(timeout_s)} s)", state="complete")
+            st.info("La ingesta continúa en el servidor; actualiza la lista en unos momentos.")
+    return res
+
+
+def render_discrepancias(lista: list, kp: str, filtros: bool = True) -> None:
+    """Informe de discrepancias A | B con severidad, prevalencia y botones de revisión."""
+    lista = [d for d in (lista or []) if isinstance(d, dict)]
+    if not lista:
+        st.success("Sin discrepancias registradas.")
+        return
+    if filtros:
+        f1, f2 = st.columns(2)
+        sevs = f1.multiselect("Severidad", ["alta", "media", "informativa"], key=f"{kp}_fsev",
+                              placeholder="todas")
+        temas = sorted({str(d.get("tema")) for d in lista if d.get("tema")})
+        tsel = f2.multiselect("Tema", temas, key=f"{kp}_ftema", placeholder="todos")
+        lista = [d for d in lista if (not sevs or d.get("severidad") in sevs)
+                 and (not tsel or str(d.get("tema")) in tsel)]
+    orden = {"alta": 0, "media": 1, "informativa": 2}
+    lista.sort(key=lambda d: orden.get(d.get("severidad"), 3))
+    n_alta = sum(1 for d in lista if d.get("severidad") == "alta")
+    st.caption(f"{len(lista)} discrepancia(s) · {n_alta} ALTA(s)")
+    for d in lista:
+        did = d.get("id")
+        sev_lbl, kind = SEV.get(d.get("severidad"), (f"⚪ {str(d.get('severidad') or '?').upper()}", "info"))
+        with st.container(border=True):
+            getattr(st, kind)(f"**{sev_lbl}** · Tema: **{md(d.get('tema') or '—')}** · {md(d.get('tipo') or '')}"
+                              f" · #{md(did)} · revisión: {md(d.get('estado_revision') or d.get('estado') or '—')}")
+            a, b = st.columns(2)
+            for col, lado, letra in ((a, "a", "A"), (b, "b", "B")):
+                with col:
+                    st.markdown(f"#### Documento {letra}: {md(d.get('doc_' + lado) or '—')}")
+                    st.markdown(f"**{md(d.get('nombre_' + lado) or '')}**  \n"
+                                f"Art. {md(d.get('art_' + lado) or '—')} · versión {md(d.get('version_' + lado) or '—')}")
+                    cita = d.get("cita_" + lado)
+                    if cita:
+                        st.markdown("> " + md(cita).replace("\n", "\n> "))
+                    else:
+                        st.caption("(sin cita literal)")
+            if d.get("prevalece") or d.get("motivo"):
+                st.success(f"**Prevalece: {md(d.get('prevalece') or '—')}** — {md(d.get('motivo') or '')}")
+            if d.get("explicacion"):
+                st.caption(md(d.get("explicacion")))
+            if did is not None and (d.get("estado_revision") in (None, "", "pendiente")):
+                com = st.text_input("Comentario (opcional)", key=f"{kp}_com_{did}")
+                c1, c2, _ = st.columns([1, 1, 3])
+                for col, dec, lbl in ((c1, "confirmada", "✅ Confirmar"), (c2, "descartada", "❌ Descartar")):
+                    if col.button(lbl, key=f"{kp}_{dec}_{did}"):
+                        _, e2 = api("POST", f"/discrepancias/{did}/revisar",
+                                    json={"decision": dec, "comentario": com})
+                        if e2:
+                            st.error(f"No se pudo registrar la revisión: {e2}")
+                        else:
+                            st.rerun()
+
+
+def _decidir(doc_id, decision: str, comentario: str) -> None:
+    r, e = api("POST", f"/documentos/{doc_id}/decision",
+               json={"decision": decision, "usuario": "web:streamlit", "comentario": comentario})
+    if e:
+        st.error(f"No se pudo registrar la decisión: {e}")
+    else:
+        r = r if isinstance(r, dict) else {}
+        st.session_state["a1_flash"] = (f"Decisión '{decision}' registrada · estado {r.get('estado')} · "
+                                        f"publicado {r.get('publicado')}")
         st.rerun()
-    docs, err = api("GET", "/documentos")
-    if err:
-        st.warning(f"El servicio de documentos no está disponible: {err}")
-    elif not docs:
-        st.info("Aún no hay normas registradas.")
-    else:
-        df = pd.DataFrame(docs)
 
-        def _color(v):
-            return f"background-color: {COLOR_ESTADO.get(v, '')}; color: white" if v in COLOR_ESTADO else ""
-        cols = [c for c in ["doc_id", "nombre_norma", "version", "estado", "tipo", "tema", "fecha_vigencia",
-                            "reemplaza_a", "n_chunks", "estado_ingesta"] if c in df.columns]
-        st.dataframe(df[cols].style.map(_color, subset=["estado"] if "estado" in cols else []),
-                     width="stretch", hide_index=True)
 
-# ------------------------------------------------------------------ Discrepancias
-with tabs[2]:
-    st.subheader("Discrepancias detectadas")
-    ds, err = api("GET", "/discrepancias")
-    if err:
-        st.warning(f"El servicio de discrepancias no está disponible: {err}")
-    elif not ds:
-        st.info("No hay discrepancias registradas.")
-    else:
-        for d in ds:
-            icon = {"alta": "🔴", "media": "🟡", "baja": "🟢"}.get(d.get("severidad"), "⚪")
-            with st.container(border=True):
-                st.markdown(f"### {icon} #{d.get('id')} · {d.get('tipo')} · severidad {d.get('severidad')} · "
-                            f"estado: **{d.get('estado_revision')}**")
-                a, b = st.columns(2)
-                a.markdown(f"**{d.get('doc_a')}**\n\n> {d.get('cita_a') or ''}")
-                b.markdown(f"**{d.get('doc_b')}**\n\n> {d.get('cita_b') or ''}")
-                st.markdown(f"*{d.get('explicacion') or ''}*")
-                if d.get("estado_revision") == "pendiente":
-                    com = st.text_input("Comentario", key=f"com_{d.get('id')}")
-                    c1, c2, _ = st.columns([1, 1, 4])
-                    for col, dec, lbl in ((c1, "confirmada", "✅ Confirmar"), (c2, "descartada", "❌ Descartar")):
-                        if col.button(lbl, key=f"{dec}_{d.get('id')}"):
-                            _, e2 = api("POST", f"/discrepancias/{d.get('id')}/revisar",
-                                        json={"decision": dec, "comentario": com})
-                            st.error(e2) if e2 else st.rerun()
+def banner_revision(doc: dict, n_altas: int, kp: str) -> None:
+    with st.container(border=True):
+        st.error(f"### ⚠️ Requiere revisión: {n_altas} discrepancias ALTAS — no se publica para el Agente 2\n\n"
+                 f"{md(doc.get('codigo') or doc.get('doc_id'))} · {md(doc.get('nombre_norma') or '')}")
+        com = st.text_input("Comentario del revisor (opcional)", key=f"{kp}_dcom")
+        c1, c2, c3 = st.columns(3)
+        if c1.button("✅ Aprobar y publicar", key=f"{kp}_aprobar", type="primary", width="stretch"):
+            _decidir(doc.get("doc_id"), "aprobar_publicar", com)
+        if c2.button("⛔ Rechazar", key=f"{kp}_rechazar", width="stretch"):
+            _decidir(doc.get("doc_id"), "rechazar", com)
+        if c3.button("📤 Publicar de todas formas", key=f"{kp}_igual", width="stretch"):
+            _decidir(doc.get("doc_id"), "publicar_igual", com)
+
+
+with tabs[1]:
+    st.subheader("🧾 Agente 1 · Ingesta y validación de normas")
+    if st.session_state.get("a1_flash"):
+        st.success(st.session_state.pop("a1_flash"))
+
+    docs, err_docs = api("GET", "/documentos")
+    if err_docs:
+        st.warning(f"El servicio de documentos no está disponible: {err_docs}")
+    docs = [d for d in (docs or []) if isinstance(d, dict)] if isinstance(docs, list) else []
+    por_id = {str(d.get("doc_id")): d for d in docs if d.get("doc_id") is not None}
+
+    # Cola de pendientes de revisión (siempre arriba)
+    pend = [d for d in docs if d.get("estado") == "pendiente_revision"]
+    if pend:
+        with st.container(border=True):
+            st.markdown(f"#### 🟠 Pendientes de revisión ({len(pend)})")
+            for d in pend:
+                c1, c2 = st.columns([5, 1])
+                c1.markdown(f"**{md(d.get('codigo') or d.get('doc_id'))}** · {md(d.get('nombre_norma') or '')} · "
+                            f"v{md(d.get('version') or '?')} · {md(d.get('entidad') or '')}")
+                if c2.button("Revisar", key=f"a1_rev_{d.get('doc_id')}"):
+                    st.session_state["a1_doc_sel"] = str(d.get("doc_id"))
+                    st.rerun()
+    elif not err_docs:
+        st.caption("✅ No hay documentos pendientes de revisión.")
+
+    sub = st.tabs(["📥 Cargar normas", "📑 Normas y detalle", "⚖️ Informe de discrepancias"])
+
+    # ---- Cargar
+    with sub[0]:
+        archivos = st.file_uploader("PDF, DOCX, TXT o MD (uno o varios)", type=["pdf", "docx", "txt", "md"],
+                                    accept_multiple_files=True, key="a1_upl")
+        if archivos and st.button(f"Subir e indexar ({len(archivos)})", type="primary", key="a1_subir"):
+            st.session_state["a1_cola"] = [(a.name, a.getvalue()) for a in archivos]
+        cola = st.session_state.pop("a1_cola", None)
+        if cola:
+            resultados = [_subir_y_seguir(n, c) for n, c in cola]
+            st.session_state["a1_resultados"] = resultados
+        elif st.session_state.get("a1_resultados"):
+            st.markdown("**Última carga**")
+            st.dataframe(pd.DataFrame(st.session_state["a1_resultados"]), width="stretch", hide_index=True)
+
+    # ---- Lista + detalle
+    with sub[1]:
+        if not docs:
+            st.info("Aún no hay normas registradas." if not err_docs else "Lista no disponible.")
+        else:
+            c1, c2 = st.columns([3, 1])
+            estados = sorted({str(d.get("estado")) for d in docs if d.get("estado")})
+            fest = c1.multiselect("Filtrar por estado", estados, key="a1_fest", placeholder="todos")
+            if c2.button("🔄 Actualizar", key="a1_ref"):
+                st.rerun()
+            vis = [d for d in docs if not fest or str(d.get("estado")) in fest]
+            filas = []
+            for d in vis:
+                notas = []
+                if d.get("estado_inferido"):
+                    notas.append("estado inferido")
+                if d.get("requiere_confirmacion"):
+                    notas.append("requiere confirmación")
+                filas.append({"código": d.get("codigo") or d.get("doc_id"), "estado": d.get("estado"),
+                              "chip": chip_txt(d.get("estado")), "norma": d.get("nombre_norma"),
+                              "tipo": d.get("tipo_fuente"), "versión": d.get("version"),
+                              "reemplaza a": d.get("reemplaza_a"), "reemplazada por": d.get("reemplazada_por"),
+                              "publicado": "✅ sí" if d.get("publicado") in (1, True, "1") else "— no",
+                              "notas": ", ".join(notas), "vigencia": d.get("fecha_vigencia"),
+                              "chunks": d.get("n_chunks"), "ingesta": d.get("estado_ingesta")})
+            df = pd.DataFrame(filas)
+            if not df.empty:
+                def _bg(v):
+                    return f"background-color: {CHIP_BG[v]}; color: white; font-weight: 600" if v in CHIP_BG else ""
+                st.dataframe(df.style.map(_bg, subset=["estado"]), width="stretch", hide_index=True,
+                             column_config={"chip": None})
+            ids = [str(d.get("doc_id")) for d in vis if d.get("doc_id") is not None]
+            sel_prev = st.session_state.get("a1_doc_sel")
+            if sel_prev and sel_prev not in ids and sel_prev in por_id:
+                ids = [sel_prev] + ids
+            if ids:
+                if st.session_state.get("a1_doc_sel") not in ids:
+                    pend_ids = [i for i in ids if por_id.get(i, {}).get("estado") == "pendiente_revision"]
+                    st.session_state["a1_doc_sel"] = (pend_ids or ids)[0]
+                sel = st.selectbox("Documento", ids, key="a1_doc_sel",
+                                   format_func=lambda i: f"{chip_txt(por_id.get(i, {}).get('estado'))} · "
+                                                         f"{por_id.get(i, {}).get('codigo') or i} · "
+                                                         f"{str(por_id.get(i, {}).get('nombre_norma') or '')[:70]}")
+                base = por_id.get(sel, {})
+                det, e_det = api("GET", f"/documentos/{sel}")
+                if e_det:
+                    st.warning(f"Detalle no disponible: {e_det}")
+                det = det if isinstance(det, dict) else {}
+                doc = {**base, **det}
+                ds, e_ds = api("GET", "/discrepancias", params={"doc_id": sel})
+                discs = ds if isinstance(ds, list) else (det.get("discrepancias") or [])
+                n_altas = sum(1 for x in discs if isinstance(x, dict) and x.get("severidad") == "alta")
+
+                st.markdown(f"### {md(doc.get('codigo') or sel)} · {md(doc.get('nombre_norma') or '')}")
+                h = st.columns(6)
+                with h[0]:
+                    chip(doc.get("estado"))
+                h[1].markdown(f"**Tipo:** {md(doc.get('tipo_fuente') or '—')}")
+                h[2].markdown(f"**Versión:** {md(doc.get('version') or '—')}")
+                h[3].markdown(f"**Publicado:** {'✅ sí' if doc.get('publicado') in (1, True, '1') else '— no'}")
+                h[4].markdown(f"**Reemplaza a:** {md(doc.get('reemplaza_a') or '—')}")
+                h[5].markdown(f"**Reemplazada por:** {md(doc.get('reemplazada_por') or '—')}")
+                if doc.get("estado_inferido") or doc.get("requiere_confirmacion"):
+                    st.info("ℹ️ Estado inferido automáticamente" +
+                            (" · requiere confirmación humana" if doc.get("requiere_confirmacion") else ""))
+                if doc.get("estado") == "pendiente_revision":
+                    banner_revision(doc, n_altas, kp=f"a1d_{sel}")
+
+                dt = st.tabs(["🗂️ Metadatos", "📌 Afirmaciones", "⚖️ Discrepancias", "🔎 Traza"])
+                with dt[0]:
+                    meta = _js(doc.get("metadatos_json")) or {k: doc.get(k) for k in
+                           ["codigo", "nombre_norma", "entidad", "tipo_fuente", "fecha_emision", "fecha_vigencia",
+                            "version", "estado"] if k in doc}
+                    conf = _js(doc.get("confianza_json"))
+                    if isinstance(meta, dict) and meta:
+                        st.dataframe(pd.DataFrame([{"campo": k, "valor": str(v) if v is not None else "",
+                                                    "confianza": str(conf.get(k, "")) if isinstance(conf, dict)
+                                                    else ""} for k, v in meta.items()]),
+                                     width="stretch", hide_index=True)
+                    else:
+                        st.info("Sin metadatos.")
+                    st.caption(f"Fecha emisión: {md(doc.get('fecha_emision') or '—')} · vigencia: "
+                               f"{md(doc.get('fecha_vigencia') or '—')} · fragmentos: {md(doc.get('n_chunks') or 0)}")
+                with dt[1]:
+                    af = [x for x in (det.get("afirmaciones") or []) if isinstance(x, dict)]
+                    if af:
+                        st.dataframe(pd.DataFrame(af)[[c for c in ["articulo", "tema", "valor", "unidad",
+                                     "condicion", "cita_literal"] if c in pd.DataFrame(af).columns]],
+                                     width="stretch", hide_index=True)
+                    else:
+                        st.info("Sin afirmaciones extraídas.")
+                with dt[2]:
+                    if e_ds and not det.get("discrepancias"):
+                        st.warning(f"Discrepancias no disponibles: {e_ds}")
+                    else:
+                        render_discrepancias(discs, kp=f"a1dd_{sel}")
+                with dt[3]:
+                    tr, e_tr = api("GET", f"/documentos/{sel}/traza")
+                    if e_tr:
+                        st.warning(f"Traza no disponible: {e_tr}")
+                    elif not tr:
+                        st.info("Sin pasos registrados.")
+                    else:
+                        tdf = pd.DataFrame([x for x in tr if isinstance(x, dict)])
+                        st.dataframe(tdf[[c for c in ["timestamp", "paso", "modelo", "tokens", "latencia_ms",
+                                                      "usuario", "entrada", "salida"] if c in tdf.columns]],
+                                     width="stretch", hide_index=True)
+                        if "latencia_ms" in tdf.columns:
+                            st.caption(f"Latencia total: {pd.to_numeric(tdf['latencia_ms'], errors='coerce').sum():.0f} ms"
+                                       f" · {len(tdf)} pasos")
+
+    # ---- Informe global de discrepancias
+    with sub[2]:
+        ds_all, e_all = api("GET", "/discrepancias")
+        if e_all:
+            st.warning(f"El servicio de discrepancias no está disponible: {e_all}")
+        else:
+            render_discrepancias(ds_all if isinstance(ds_all, list) else [], kp="a1g")
 
 # ------------------------------------------------------------------ Trazas
-with tabs[3]:
+with tabs[2]:
     st.subheader("Trazas de ejecución de agentes")
     ts, err = api("GET", "/trazas", params={"limit": 50})
     if err:
@@ -196,7 +514,7 @@ with tabs[3]:
                     st.json(det["consulta"], expanded=False)
 
 # ------------------------------------------------------------------ Dashboard
-with tabs[4]:
+with tabs[3]:
     dash, err = api("GET", "/dashboard")
     if err:
         st.warning(f"No se pudo cargar el dashboard: {err}")
@@ -293,7 +611,7 @@ def fetch_kpis(params: dict):
     return api("GET", "/kpis", params=params, timeout=60)
 
 
-with tabs[5]:
+with tabs[4]:
     import datetime as _dt
 
     st.subheader("🎯 KPIs · valor medible de los agentes")
