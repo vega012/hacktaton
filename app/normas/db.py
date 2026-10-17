@@ -83,7 +83,34 @@ CREATE TABLE IF NOT EXISTS trazas (
     estado TEXT,
     created_at TEXT, updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS brechas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    consulta_id INTEGER, run_id TEXT,
+    tema TEXT, descripcion TEXT,
+    created_at TEXT
+);
 """
+
+# Columnas agregadas después (KPIs). Filas viejas quedan en NULL = sin dato.
+MIGRACIONES = {
+    "consultas": [("tipo", "TEXT"), ("n_citas_propuestas", "INTEGER"), ("n_citas_verificadas", "INTEGER"),
+                  ("confianza_score", "REAL"), ("advertencia_conflicto", "INTEGER"),
+                  ("advertencia_obsoleta", "INTEGER"), ("motivo_sin_cobertura", "TEXT")],
+    "trazas": [("started_at", "TEXT"), ("finished_at", "TEXT")],
+    "documentos": [("reemplazada_por", "TEXT"), ("estado_actualizado_at", "TEXT")],
+}
+
+
+def _migrar(con: sqlite3.Connection) -> None:
+    for tabla, cols in MIGRACIONES.items():
+        existentes = {r[1] for r in con.execute(f"PRAGMA table_info({tabla})").fetchall()}
+        for nombre, tipo in cols:
+            if nombre not in existentes:
+                try:
+                    con.execute(f"ALTER TABLE {tabla} ADD COLUMN {nombre} {tipo}")
+                except sqlite3.OperationalError as e:  # otra conexión la agregó a la vez
+                    if "duplicate column" not in str(e).lower():
+                        raise
 
 # Lista cerrada de temas: la usan la ingesta (clasificar normas) y las consultas (clasificar preguntas)
 TEMAS = [
@@ -95,6 +122,10 @@ TEMAS = [
 
 def now() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def now_ms() -> str:
+    return datetime.now().isoformat(timespec="milliseconds")
 
 
 def db_file() -> Path:
@@ -116,6 +147,7 @@ def connect() -> Iterator[sqlite3.Connection]:
         if not _initialized:
             con.execute("PRAGMA journal_mode=WAL")
             con.executescript(SCHEMA)
+            _migrar(con)
             _initialized = True
         yield con
         con.commit()
@@ -138,18 +170,24 @@ def save_trace(run: Any) -> None:
     """Vuelca un Run (app/agents/trace.py) a la tabla trazas. Lo llama RunStore.save."""
     meta = getattr(run, "meta", {}) or {}
     steps = [s if isinstance(s, dict) else s.__dict__ for s in run.steps]
+    started = getattr(run, "started_at", None)
+    finished = getattr(run, "finished_at", None)
     try:
-        t0 = datetime.fromisoformat(run.created_at)
-        t1 = datetime.fromisoformat(run.updated_at)
-        latency = int((t1 - t0).total_seconds() * 1000)
+        if started and finished:
+            latency = int((datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds() * 1000)
+        else:
+            t0 = datetime.fromisoformat(run.created_at)
+            t1 = datetime.fromisoformat(run.updated_at)
+            latency = int((t1 - t0).total_seconds() * 1000)
     except ValueError:
         latency = None
     with connect() as con:
         con.execute(
             "INSERT OR REPLACE INTO trazas (run_id, agente, canal, usuario, modelo, entrada, salida, pasos_json,"
-            " latencia_ms, estado, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " latencia_ms, estado, created_at, updated_at, started_at, finished_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run.id, meta.get("agente", run.case), meta.get("canal"), meta.get("usuario"),
              meta.get("modelo", get_settings().llm_model), run.input, run.output or run.error,
              json.dumps(steps, ensure_ascii=False, default=str), meta.get("latencia_ms", latency),
-             run.status, run.created_at, run.updated_at),
+             run.status, run.created_at, run.updated_at, started, finished),
         )

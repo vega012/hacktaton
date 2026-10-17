@@ -138,7 +138,8 @@ Tu respuesta final debe ser SOLO un objeto JSON (sin texto adicional) con esta f
  "calculos": [{"descripcion": "...", "expresion": "...", "resultado": 0}],
  "conflictos": ["..."], "vacios": ["..."], "advertencias": ["..."],
  "conclusion": "procede|procede_con_observaciones|no_procede|requiere_escalamiento",
- "acciones": ["..."]}"""
+ "acciones": ["..."], "tema": "<tema del caso>", "temas_vacios": ["<tema de cada vacío, mismo orden que vacios>"]}
+"tema" y cada elemento de "temas_vacios" deben ser uno de: """ + ", ".join(db.TEMAS) + "."
 
 AGENTE = Agent(name="analista_casos", role=ROLE, tools=cons.TOOLS + ["cas_calcular"],
                temperature=0, max_iterations=14)
@@ -228,14 +229,16 @@ def _lista_str(v: Any) -> list[str]:
     return [str(x).strip() for x in v if str(x).strip()]
 
 
-def _postproceso(data: dict[str, Any]) -> tuple[dict[str, Any], list[dict], list[str], str]:
+def _postproceso(data: dict[str, Any]) -> tuple[dict[str, Any], list[dict], list[str], str, dict[str, Any]]:
     docs = cons._docs_sqlite()
     advertencias = [a for a in _lista_str(data.get("advertencias"))
                     if not re.match(r"(?i)^\s*no se (registr|encontr|detect|identific)", a)]
     evaluaciones, citas, chunks_usados, docs_usados = [], [], set(), set()
+    stats = {"propuestas": 0, "verificadas": [], "obsoleta": False, "conflicto": False}
     for e in data.get("evaluaciones") or []:
         if not isinstance(e, dict):
             continue
+        stats["propuestas"] += 1
         ch = _chunk(str(e.get("chunk_id") or "").strip(), str(e.get("doc_id") or ""), str(e.get("articulo") or ""))
         res = e.get("resultado") if e.get("resultado") in RESULTADOS else "indeterminado"
         cita = str(e.get("cita") or "").strip()
@@ -257,9 +260,11 @@ def _postproceso(data: dict[str, Any]) -> tuple[dict[str, Any], list[dict], list
         if ev["estado"] and ev["estado"] != "vigente":
             advertencias.append(f"{ev['nombre_norma']} v{ev['version']} Art. {ev['articulo']} ({ev['doc_id']}) está "
                                 f"{ev['estado']}: no respalda el dictamen. {ev['regla']}: {ev['explicacion']}".strip())
+            stats["obsoleta"] = True
             continue
         evaluaciones.append(ev)
         if ev["cita_verificada"]:
+            stats["verificadas"].append({"chunk_id": ch["id"]})
             chunks_usados.add(ch["id"])
             docs_usados.add(ch["doc_id"])
             if ch["id"] not in {c.get("chunk_id") for c in citas}:
@@ -324,13 +329,14 @@ def _postproceso(data: dict[str, Any]) -> tuple[dict[str, Any], list[dict], list
         "vacios": _lista_str(data.get("vacios")), "conclusion": conclusion,
         "acciones": _lista_str(data.get("acciones")),
     }
-    return dictamen, citas, advertencias, confianza
+    stats["conflicto"] = hay_registrado
+    return dictamen, citas, advertencias, confianza, stats
 
 
 # ---------------------------------------------------------------------------- Flujos
 def _analizar_caso(session_id: str, texto_caso: str, previo: dict | None) -> dict[str, Any]:
     t0 = time.perf_counter()
-    cons._ctx.hits, cons._ctx.scores = {}, []
+    cons._ctx.hits, cons._ctx.scores, cons._ctx.obsoleta = {}, [], False
     _calc_ctx.calculos = []
     tarea = texto_caso
     if previo:
@@ -352,7 +358,7 @@ def _analizar_caso(session_id: str, texto_caso: str, previo: dict | None) -> dic
     if session.status != "done":
         run.add_step("analista_casos", "error", f"Agente no terminó: {session.output}")
 
-    dictamen, citas, advertencias, confianza = _postproceso(data)
+    dictamen, citas, advertencias, confianza, stats = _postproceso(data)
     respuesta = str(data.get("respuesta") or "").strip()
     if not respuesta:
         respuesta = ("No pude completar el análisis del caso; requiere revisión manual."
@@ -373,13 +379,20 @@ def _analizar_caso(session_id: str, texto_caso: str, previo: dict | None) -> dic
     run.meta["latencia_ms"] = latencia
     run_store.save(run)
 
-    db.execute(
-        "INSERT INTO consultas (canal, usuario, pregunta, tema, respuesta, confianza, top_score, cubierta,"
-        " citas_json, advertencias_json, run_id, latencia_ms, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        ("chat", session_id, "[Caso] " + dictamen["resumen_caso"][:500], "credito_consumo"
-         if any((c.get("doc_id") or "").startswith("SINT") for c in citas) else "otros",
-         respuesta, confianza, None, int(confianza != "sin_respaldo"),
-         json.dumps(citas, ensure_ascii=False), json.dumps(advertencias, ensure_ascii=False), run.id, latencia, db.now()))
+    # KPIs: score real de lo recuperado durante el caso, tema clasificado por el LLM (lista cerrada)
+    scores = cons._scores_vigentes()
+    top = max(scores) if scores else None
+    tema = data.get("tema") if data.get("tema") in db.TEMAS else "otros"
+    m = cons.metricas(stats["propuestas"], stats["verificadas"], top, stats["conflicto"], stats["obsoleta"])
+    if confianza == "sin_respaldo" and not m["motivo_sin_cobertura"]:
+        m["motivo_sin_cobertura"] = "no_encontro"
+    consulta_id = cons.guardar_consulta("caso", "chat", session_id, "[Caso] " + dictamen["resumen_caso"][:500],
+                                        tema, respuesta, confianza, top, citas, advertencias, run.id, latencia, m)
+    temas_vacios = data.get("temas_vacios") if isinstance(data.get("temas_vacios"), list) else []
+    for i, vacio in enumerate(dictamen["vacios"]):
+        tv = temas_vacios[i] if i < len(temas_vacios) and temas_vacios[i] in db.TEMAS else tema
+        db.execute("INSERT INTO brechas (consulta_id, run_id, tema, descripcion, created_at) VALUES (?,?,?,?,?)",
+                   (consulta_id, run.id, tv, vacio, db.now()))
 
     return {"session_id": session_id, "run_id": run.id, "tipo": "caso", "latencia_ms": latencia,
             "respuesta": respuesta, "confianza": confianza,

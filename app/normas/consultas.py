@@ -296,6 +296,8 @@ def _advertencias_deterministas(citas: list[dict[str, Any]], previas: list[str])
     for h in _hits_vistos().values():
         relacionada = h.get("nombre_norma") in nombres and (
             (h.get("nombre_norma"), _articulo(h.get("articulo"))) in citadas or not h.get("articulo"))
+        if h.get("estado") in ("reemplazada", "derogada") and relacionada and h.get("doc_id"):
+            _ctx.obsoleta = True  # KPI: versión no vigente involucrada en la respuesta
         if (h.get("estado") in ("reemplazada", "derogada") and relacionada and h.get("doc_id")
                 and not ("reemplaz" in texto_prev or "derog" in texto_prev or "anterior" in texto_prev)):
             if not any(h["doc_id"] in a for a in adv):
@@ -313,10 +315,47 @@ def _confianza(top: float, n_citas: int, conflicto: bool) -> str:
     return "media"
 
 
+# ---------------------------------------------------------------------------- Métricas (KPIs)
+def metricas(n_propuestas: int, verificadas: list[dict[str, Any]], top: float | None,
+             conflicto: bool, obsoleta: bool) -> dict[str, Any]:
+    """Valores calculados por el código que decide (no por texto libre). Ver docs/KPIS.md."""
+    n_ver = len(verificadas)
+    if n_ver:
+        scores = [(_hits_vistos().get(c["chunk_id"]) or {}).get("best_score") for c in verificadas]
+        scores = [x for x in scores if x is not None]
+        best = max(scores) if scores else (top or 0.0)  # cita leída por artículo: score de la búsqueda
+        score = round(best * (n_ver / max(n_propuestas, n_ver)), 4)
+    else:
+        score = 0.0
+    if n_ver == 0:
+        motivo = "no_encontro"
+    elif top is not None and top < _umbrales()["U2"]:
+        motivo = "score_bajo"
+    else:
+        motivo = None
+    return {"n_citas_propuestas": n_propuestas, "n_citas_verificadas": n_ver, "confianza_score": score,
+            "advertencia_conflicto": int(bool(conflicto)), "advertencia_obsoleta": int(bool(obsoleta)),
+            "motivo_sin_cobertura": motivo}
+
+
+def guardar_consulta(tipo: str, canal: str, usuario: str, pregunta: str, tema: str, respuesta: str,
+                     confianza: str, top: float | None, citas: list[dict[str, Any]], advertencias: list[str],
+                     run_id: str, latencia: int, m: dict[str, Any]) -> int:
+    return db.execute(
+        "INSERT INTO consultas (canal, usuario, pregunta, tema, respuesta, confianza, top_score, cubierta,"
+        " citas_json, advertencias_json, run_id, latencia_ms, created_at, tipo, n_citas_propuestas,"
+        " n_citas_verificadas, confianza_score, advertencia_conflicto, advertencia_obsoleta, motivo_sin_cobertura)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (canal, usuario, pregunta, tema, respuesta, confianza, top, int(confianza != "sin_respaldo"),
+         json.dumps(citas, ensure_ascii=False), json.dumps(advertencias, ensure_ascii=False),
+         run_id, latencia, db.now(), tipo, m["n_citas_propuestas"], m["n_citas_verificadas"],
+         m["confianza_score"], m["advertencia_conflicto"], m["advertencia_obsoleta"], m["motivo_sin_cobertura"]))
+
+
 # ---------------------------------------------------------------------------- API pública
 def responder(pregunta: str, canal: str = "web", usuario: str = "anonimo") -> dict[str, Any]:
     t0 = time.perf_counter()
-    _ctx.hits, _ctx.scores = {}, []
+    _ctx.hits, _ctx.scores, _ctx.obsoleta = {}, [], False
     run = run_store.create("normativa", pregunta)
     run.meta = {"agente": "consultas", "canal": canal, "usuario": usuario,
                 "modelo": get_settings().llm_model}
@@ -335,6 +374,7 @@ def responder(pregunta: str, canal: str = "web", usuario: str = "anonimo") -> di
     _buscar(pregunta, solo_vigentes=True)
     top = max(_scores_vigentes() or [0.0])
 
+    propuestas = [c for c in data["citas"] if isinstance(c, dict)] if isinstance(data.get("citas"), list) else []
     citas = _verificar_citas(data.get("citas"))
     adv_llm = [str(a) for a in (data.get("advertencias") or []) if str(a).strip()
                and not re.match(r"(?i)^\s*no se (registr|encontr|detect|identific)", str(a))]
@@ -345,12 +385,16 @@ def responder(pregunta: str, canal: str = "web", usuario: str = "anonimo") -> di
                        f"{c.get('articulo')} ({c.get('doc_id')}) porque está {c.get('estado')}.")
     advertencias, conflicto = _advertencias_deterministas(citas, adv_llm)
     confianza = _confianza(top, len(citas), conflicto)
+    m = metricas(len(propuestas), citas, top, conflicto, bool(no_vigentes) or bool(getattr(_ctx, "obsoleta", False)))
 
     respuesta = str(data.get("respuesta") or "").strip()
     if confianza == "sin_respaldo" or not respuesta:
         confianza = "sin_respaldo"
         respuesta, citas = SIN_RESPALDO, []
         advertencias = adv_llm
+        m["advertencia_conflicto"] = 0  # el aviso determinista de conflicto no se entrega
+        m["advertencia_obsoleta"] = int(bool(no_vigentes))
+        m["motivo_sin_cobertura"] = m["motivo_sin_cobertura"] or "no_encontro"
     tema = data.get("tema") if data.get("tema") in db.TEMAS else "otros"
 
     latencia = int((time.perf_counter() - t0) * 1000)
@@ -363,12 +407,8 @@ def responder(pregunta: str, canal: str = "web", usuario: str = "anonimo") -> di
     run.meta["latencia_ms"] = latencia
     run_store.save(run)
 
-    db.execute(
-        "INSERT INTO consultas (canal, usuario, pregunta, tema, respuesta, confianza, top_score, cubierta,"
-        " citas_json, advertencias_json, run_id, latencia_ms, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (canal, usuario, pregunta, tema, respuesta, confianza, top, int(confianza != "sin_respaldo"),
-         json.dumps(citas, ensure_ascii=False), json.dumps(advertencias, ensure_ascii=False),
-         run.id, latencia, db.now()))
+    guardar_consulta("consulta", canal, usuario, pregunta, tema, respuesta, confianza, top, citas, advertencias,
+                     run.id, latencia, m)
 
     return {"respuesta": respuesta, "confianza": confianza, "cubierta": confianza != "sin_respaldo",
             "citas": citas, "advertencias": advertencias, "tema": tema, "top_score": round(top, 4),

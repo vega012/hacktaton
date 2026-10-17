@@ -22,6 +22,10 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _now_ms() -> str:
+    return datetime.now().isoformat(timespec="milliseconds")
+
+
 def _short_id() -> str:
     return uuid.uuid4().hex[:8]
 
@@ -68,6 +72,8 @@ class Run:
     error: str | None = None
     state: dict[str, Any] = field(default_factory=dict)  # estado compartido entre agentes
     meta: dict[str, Any] = field(default_factory=dict)   # agente, canal, usuario, modelo (tabla trazas)
+    started_at: str = field(default_factory=_now_ms)    # ISO con milisegundos (KPI tiempo de respuesta)
+    finished_at: str | None = None                       # se fija al guardar con status completed/failed
 
     def add_step(self, agent: str, type_: str, summary: str, **data: Any) -> Step:
         step = Step(n=len(self.steps) + 1, ts=_now(), agent=agent, type=type_, summary=summary, data=data)
@@ -113,6 +119,10 @@ class RunStore:
         return None
 
     def save(self, run: Run) -> None:
+        if run.status in ("completed", "failed") and not run.finished_at:
+            run.finished_at = _now_ms()
+        elif run.status not in ("completed", "failed"):
+            run.finished_at = None  # se reanudó (p. ej. tras una aprobación)
         if not self.persist_dir:
             return
         try:

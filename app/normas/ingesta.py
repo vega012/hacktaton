@@ -189,11 +189,17 @@ def ingerir(path: str | Path, metadatos: dict[str, Any] | None = None, validar: 
             con.execute("INSERT INTO chunks_fts (chunk_id, doc_id, articulo, texto) VALUES (?,?,?,?)",
                         (c["chunk_id"], doc_id, c["articulo"], c["texto"]))
 
+    if estado == "reemplazada":  # una versión posterior ya estaba cargada
+        posterior = db.query("SELECT doc_id FROM documentos WHERE reemplaza_a = ? AND doc_id != ? LIMIT 1",
+                             (meta["doc_id"], doc_id))
+        db.execute("UPDATE documentos SET reemplazada_por = ?, estado_actualizado_at = ? WHERE doc_id = ?",
+                   (posterior[0]["doc_id"] if posterior else None, db.now(), doc_id))
     try:
         reindexar(doc_id)
         ra = meta.get("reemplaza_a")
         if ra and db.query("SELECT 1 FROM documentos WHERE doc_id = ?", (ra,)):
-            db.execute("UPDATE documentos SET estado = 'reemplazada' WHERE doc_id = ?", (ra,))
+            db.execute("UPDATE documentos SET estado = 'reemplazada', reemplazada_por = ?, estado_actualizado_at = ?"
+                       " WHERE doc_id = ?", (doc_id, db.now(), ra))
             reindexar(ra)
             log.info("%s reemplaza a %s: marcado como reemplazada", doc_id, ra)
     except Exception as e:
