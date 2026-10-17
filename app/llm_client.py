@@ -1,4 +1,6 @@
-"""Único punto de acceso al LLM (DeepSeek vía API compatible con OpenAI).
+"""Único punto de acceso al LLM (DeepSeek o Anthropic, ambos vía API compatible con OpenAI).
+
+LLM_PROVIDER=deepseek (por defecto) | anthropic. Cambiar de proveedor = cambiar esa variable.
 
 Para cambiar de proveedor o modelo solo se toca este archivo (y las variables de entorno).
 El resto del código usa `get_llm().chat(...)` y recibe un `LLMResponse` neutral.
@@ -117,17 +119,21 @@ class LLMClient:
         max_retries: int | None = None,
     ) -> None:
         s = get_settings()
-        self.model = model or s.deepseek_model
+        self.provider = s.llm_provider.strip().lower()
+        if self.provider == "anthropic":
+            key, url, env = api_key or s.anthropic_api_key, base_url or s.anthropic_base_url, "ANTHROPIC_API_KEY"
+        else:
+            key, url, env = api_key or s.deepseek_api_key, base_url or s.deepseek_base_url, "DEEPSEEK_API_KEY"
+        self.model = model or s.llm_model
         self.max_retries = s.llm_max_retries if max_retries is None else max_retries
         self.default_thinking = s.llm_thinking
         self.default_effort = s.llm_reasoning_effort
-        key = api_key or s.deepseek_api_key
         if not key:
-            raise LLMError("Falta DEEPSEEK_API_KEY en el entorno / .env")
+            raise LLMError(f"Falta {env} en el entorno / .env")
         # max_retries=0 en el SDK: los reintentos los controlamos aquí, con logs.
         self._client = OpenAI(
             api_key=key,
-            base_url=base_url or s.deepseek_base_url,
+            base_url=url,
             timeout=timeout or s.llm_timeout,
             max_retries=0,
         )
@@ -148,10 +154,12 @@ class LLMClient:
             kwargs["tools"] = tools
         if temperature is not None and not thinking:
             kwargs["temperature"] = temperature
-        extra_body: dict[str, Any] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
-        if thinking:
-            kwargs["reasoning_effort"] = reasoning_effort or self.default_effort
-        kwargs["extra_body"] = extra_body
+        if self.provider == "deepseek":
+            kwargs["extra_body"] = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+            if thinking:
+                kwargs["reasoning_effort"] = reasoning_effort or self.default_effort
+        else:
+            kwargs["max_tokens"] = 4096
 
         attempt = 0
         while True:

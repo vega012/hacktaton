@@ -67,6 +67,7 @@ class Run:
     output: str | None = None
     error: str | None = None
     state: dict[str, Any] = field(default_factory=dict)  # estado compartido entre agentes
+    meta: dict[str, Any] = field(default_factory=dict)   # agente, canal, usuario, modelo (tabla trazas)
 
     def add_step(self, agent: str, type_: str, summary: str, **data: Any) -> Step:
         step = Step(n=len(self.steps) + 1, ts=_now(), agent=agent, type=type_, summary=summary, data=data)
@@ -119,6 +120,11 @@ class RunStore:
             path.write_text(json.dumps(run.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         except OSError:
             log.exception("No se pudo guardar la traza del run %s", run.id)
+        try:
+            from app.normas import db  # import diferido: evita ciclos
+            db.save_trace(run)
+        except Exception:
+            log.exception("No se pudo guardar la traza del run %s en SQLite", run.id)
 
 
 store = RunStore()

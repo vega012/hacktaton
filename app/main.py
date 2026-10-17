@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
 from app.api import router as api_router
+from app.normas.api import router as normas_router
 from app.config import get_settings
 from app.logging_config import setup_logging
 from sectors import active
@@ -19,19 +20,24 @@ log = logging.getLogger("app")
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    log.info("Arrancando %s | sector=%s | modelo=%s", settings.app_name, active().name, settings.deepseek_model)
-    if not settings.deepseek_api_key:
+    log.info("Arrancando %s | sector=%s | modelo=%s", settings.app_name, active().name, settings.llm_model)
+    if settings.llm_provider == "anthropic" and not settings.anthropic_api_key:
+        log.warning("ANTHROPIC_API_KEY no está configurada")
+    elif settings.llm_provider != "anthropic" and not settings.deepseek_api_key:
         log.warning("DEEPSEEK_API_KEY no está configurada")
+    if not settings.pinecone_api_key:
+        log.warning("PINECONE_API_KEY no está configurada: se usa el índice local de respaldo")
     yield
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.include_router(api_router)
+app.include_router(normas_router)
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "app": settings.app_name, "sector": active().name, "model": settings.deepseek_model}
+    return {"status": "ok", "app": settings.app_name, "sector": active().name, "model": settings.llm_model, "llm_provider": settings.llm_provider}
 
 
 INDEX = Path(__file__).resolve().parent / "static" / "index.html"
