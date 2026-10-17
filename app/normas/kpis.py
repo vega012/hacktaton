@@ -214,6 +214,14 @@ def calcular(desde: str | None = None, hasta: str | None = None, umbral: float |
         else:
             completas += 1
     den_t = completas + len(incompletas)
+    # por agente: mismo criterio, para separar el Agente 1 (validador) del Agente 2 (consultas, analista_casos)
+    por_ag: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for t in trazas:
+        if t["estado"] in ("completed", "failed"):
+            por_ag[t["agente"] or "?"][1] += 1
+    for inc in incompletas:
+        por_ag[inc["agente"] or "?"][0] += 1
+    completas_por_agente = {a: _pct(den - inc_n, den) for a, (inc_n, den) in sorted(por_ag.items())}
 
     top: Counter = Counter()
     nombres: dict[str, str] = {}
@@ -237,7 +245,8 @@ def calcular(desde: str | None = None, hasta: str | None = None, umbral: float |
         brechas[b["tema"] or "otros"].append(b["descripcion"])
     brechas_l = sorted(({"tema": k, "n": len(v), "ejemplos": v[:3]} for k, v in brechas.items()),
                        key=lambda x: -x["n"])
-    trazabilidad = {"trazas_completas": {**_pct(completas, den_t), "incompletas": incompletas},
+    trazabilidad = {"trazas_completas": {**_pct(completas, den_t), "incompletas": incompletas,
+                                         "por_agente": completas_por_agente},
                     "top_normas": top_normas, "brechas": brechas_l}
 
     # ------------------------------------------------------------------ tendencia
