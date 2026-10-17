@@ -12,4 +12,5 @@ def setup_logging(level: str = "INFO") -> None:
         force=True,
     )
     # Reducir ruido de librerías HTTP
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    for name in ("httpx", "httpx2", "httpcore", "openai"):
+        logging.getLogger(name).setLevel(logging.WARNING)

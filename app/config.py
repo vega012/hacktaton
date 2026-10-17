@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-flash"
     deepseek_base_url: str = "https://api.deepseek.com"
 
+    # Comportamiento del cliente LLM
+    llm_timeout: float = 60.0          # segundos por request
+    llm_max_retries: int = 3           # reintentos ante errores transitorios
+    llm_thinking: bool = False         # modo thinking por defecto (configurable por agente)
+    llm_reasoning_effort: str = "high"  # low | high | max (solo aplica con thinking)
+
 
 @lru_cache
 def get_settings() -> Settings:
