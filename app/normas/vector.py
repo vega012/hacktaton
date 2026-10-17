@@ -97,6 +97,7 @@ class PineconeStore(VectorStore):
             )
         self.index = self.pc.Index(s.pinecone_index)
         self.ns = s.pinecone_namespace
+        self.rerank_agotado = False
 
     def upsert(self, records: list[dict[str, Any]]) -> int:
         rows = [_to_pinecone(r) for r in records]
@@ -115,8 +116,10 @@ class PineconeStore(VectorStore):
             fields = dict(h.get("fields") or {})
             body = fields.pop(TEXT_FIELD, "")
             hits.append(Hit(id=h["_id"], score=float(h["_score"]), text=body, metadata=fields))
-        if rerank_top_n and hits and self.s.use_rerank:
+        if rerank_top_n and hits and self.s.use_rerank and not self.rerank_agotado:
             hits = self._rerank(text, hits, rerank_top_n)
+        elif rerank_top_n:
+            hits = hits[:rerank_top_n]
         return hits
 
     def _rerank(self, text: str, hits: list[Hit], top_n: int) -> list[Hit]:
@@ -126,8 +129,12 @@ class PineconeStore(VectorStore):
                 documents=[{"id": h.id, "text": h.text} for h in hits],
                 top_n=min(top_n, len(hits)), return_documents=False,
             )
-        except Exception:
-            log.exception("Rerank falló; se usan los scores densos")
+        except Exception as e:
+            if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):  # cuota agotada: no reintentar en cada consulta
+                self.rerank_agotado = True
+                log.error("Cuota de rerank agotada: se desactiva el rerank y se usan los scores densos")
+            else:
+                log.exception("Rerank falló; se usan los scores densos")
             return hits[:top_n]
         out = []
         for row in rr.data:

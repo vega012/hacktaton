@@ -223,7 +223,8 @@ def _parse_json(text: str) -> dict[str, Any]:
 def _umbrales() -> dict[str, float]:
     st = get_store()
     if st.backend == "pinecone":
-        return UMBRALES["pinecone_rerank"] if RERANK_TOP_N else UMBRALES["pinecone"]
+        con_rerank = RERANK_TOP_N and get_settings().use_rerank and not getattr(st, "rerank_agotado", False)
+        return UMBRALES["pinecone_rerank"] if con_rerank else UMBRALES["pinecone"]
     return UMBRALES["local"]
 
 
